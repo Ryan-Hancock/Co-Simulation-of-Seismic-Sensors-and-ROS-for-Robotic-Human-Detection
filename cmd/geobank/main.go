@@ -37,8 +37,10 @@ func main() {
 		err = build(os.Args[2:])
 	case "inspect":
 		err = inspect(os.Args[2:])
+	case "conformance":
+		err = conformance(os.Args[2:])
 	default:
-		err = fmt.Errorf("unknown command %q (have build, inspect)", os.Args[1])
+		err = fmt.Errorf("unknown command %q (have build, inspect, conformance)", os.Args[1])
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "geobank:", err)
@@ -208,4 +210,58 @@ func loadMedium(path string) (layer.Stack, error) {
 		return nil, err
 	}
 	return g.Layers, nil
+}
+
+// Conformance fixture constants, matching py/bankfmt/conformance.py exactly.
+const (
+	conformCount   = 7
+	conformSamples = 32
+	conformRate    = 2000.0
+)
+
+// conformPattern is the payload both implementations must agree on.
+//
+// Deliberately not physics. Range index and bin index enter differently, so a
+// transposed layout fails; the real and imaginary parts differ, so a swapped
+// pair fails; and the magnitudes span several decades, so a float32 and
+// float64 confusion fails. Real Green's functions would hide all three behind
+// numbers that still looked plausible.
+func conformPattern(i, k int) complex128 {
+	return complex(float64(i+1)*math.Pow(10, float64(k%5-2)), -float64(k+1)*0.25+float64(i))
+}
+
+// conformance writes the fixture this project's Python side checks, so the two
+// implementations of the format are held against each other rather than each
+// against itself.
+func conformance(args []string) error {
+	fs := flag.NewFlagSet("conformance", flag.ExitOnError)
+	out := fs.String("o", "testdata/bank/go_written.bank", "output path")
+	fs.Parse(args)
+
+	h := bank.Header{
+		FormatVersion: bank.FormatVersion,
+		Provenance:    bank.Provenance{Solver: "go conformance fixture"},
+		Medium:        layer.Stack{{Vp: 500, Vs: 200, Density: 1700}},
+		SampleRateHz:  conformRate,
+		Samples:       conformSamples,
+		Ranges:        bank.RangeGrid{MinM: 1, MaxM: 4, Count: conformCount},
+		Component:     "conformance fixture, not physical",
+		Units:         "m/N",
+	}
+	b, err := bank.New(h)
+	if err != nil {
+		return err
+	}
+	for i := range conformCount {
+		for k := range b.Bins() {
+			if err := b.Set(i, k, conformPattern(i, k)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := bank.Write(*out, b); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", *out)
+	return nil
 }
