@@ -282,10 +282,47 @@ it is the ambiguity WP3's arrival picking will meet on real data.
 | **Ships** | A node on a live ROS 2 graph emitting chunks in simulated time. |
 | **Exit** | V12 (chunk continuity), transport benchmarked at chunk rate under sim time. |
 
-Deliberately this early. The transport and timing must be proven before any
-physics depends on them, and V12 catches a bug class (chunk-edge
-discontinuities indistinguishable from real transients) that would otherwise
-survive into WP3.
+**Status: done.** `cmd/geonode` publishes `geosim_msgs/GeophoneChunk` on a
+Conductor node under `/clock`; `conductor check` validates the graph with no
+warnings. V12 holds twice over: inside the convolver to machine precision, and
+end-to-end — the published stream reassembled and compared against the offline
+model synthesised in one piece, agreeing to float32 precision across the
+engine's buffering, the timer, encoding, and the transport.
+
+**Real-time factor, the number that gates WP2** (one receiver, loam, 2 kHz,
+zero allocations per chunk):
+
+| chunk | per chunk | share of real time |
+|---|---|---|
+| 5 ms | 8.7 µs | 0.17% |
+| 10 ms | 7.5 µs | 0.075% |
+| 100 ms | 18.0 µs | 0.018% |
+
+Cost is flat across a 20× range of chunk sizes, which was the point of using
+partitioned rather than plain overlap-add: chunk length is the knob O2 sweeps,
+and a synthesis cost that blew up as it turned would make coupling error and
+compute cost inseparable in the results.
+
+**Finding: `Synthesise` was carrying an acausal artefact, and the streaming
+path exposed it.** The two paths disagreed by ~1% of peak in the coda. It was
+not truncation — the discarded impulse-response tail holds 3.5e-14 of the
+energy, and the disagreement was independent of response length, transform
+size, and the anti-alias taper. It was the acausal pre-ring of the band limit,
+which a frequency-domain product keeps and a causal impulse response discards.
+Confirmed by adding the negative-time taps back, which reproduced the spectral
+answer to 3e-14. Both paths now run through the same causal impulse response,
+so the offline path lost an artefact it should never have had.
+
+**Finding: publishing a reused buffer is silently wrong on an in-process
+transport.** Messages pass by reference, so every subscriber held the same
+array and saw only the most recent chunk — each chunk individually correct,
+only the assembled stream wrong. Caught by the reassembly test, invisible to
+inspection.
+
+**Open, and an O2 question rather than a defect**: the chunk stamp is the
+runtime's clock reading at the tick, while sample times within a chunk come
+from the sample rate. How far those drift apart under a coarse `/clock` is
+exactly the interface-error question O2 exists to characterise.
 
 ### Slice 2 — "the source is defensible"
 
