@@ -562,6 +562,83 @@ receivers. If that is not comfortably faster than real time with margin for
 Isaac and ROS 2 on the same machine, WP2's architecture has to change. Better
 to learn it here than three work packages later.
 
+**Status: format, interpolation, conformance and integration done.** Remaining
+is the L3 (Devito/SPECFEM3D) import path — `py/bankfmt` can already write the
+format, so what is left is a driver, not a format question.
+
+**Interpolated lookup costs 32 ns with no allocation**, against milliseconds to
+compute the same response from the wavenumber integral — four orders of
+magnitude, and what moves the layered near-field physics from offline into a
+chunk.
+
+**The design decision: store the frequency response, interpolate log-magnitude
+and unwrapped phase separately.** Interpolating two time-domain impulse
+responses gives the average of two arrivals at different times — a waveform with
+two peaks where the real one has one. Phase is very nearly linear in range and
+log-magnitude nearly so, so interpolating those reproduces a single arrival at
+the right time. Measured at **21× more accurate** than averaging the complex
+values, which is the obvious alternative and cancels badly when two ranges are
+half a wavelength apart.
+
+**Interpolation error quantified** (100 Hz over loam, against directly stored
+values):
+
+| spacing | ×limit | amplitude | phase |
+|---|---|---|---|
+| 0.20 m | 0.5× | 0.5% | 0.21° |
+| 0.40 m | 0.9× | 1.8% | 0.81° |
+| 0.80 m | 1.8× | 5.9% | 2.9° |
+| 1.60 m | 3.7× | 24% | **180°** |
+
+Quadratic in spacing while unwrapping holds, then **catastrophic rather than
+gradual**: past the limit the phase error saturates at half a turn and the
+response is arbitrary, not merely inaccurate. So `CheckRangeSampling` refuses to
+build such a bank. The range axis has a Nyquist condition exactly analogous to
+the time axis: Δr < c/2f.
+
+**Isolating that measurement mattered.** A first attempt compared the bank
+against a directly computed response and found tens of percent error at high
+frequency — but the *bank* was the more converged of the two, because it
+integrates on a wavenumber grid fine enough for its longest range. Comparing a
+decimated bank against the fine one it came from removes the reference from the
+question entirely.
+
+**Cross-language conformance, both directions** (§6's requirement).
+`py/bankfmt` reads and writes the format; Go reads Python's fixture to 3e-8
+(the float32 floor) and Python reads Go's exactly. Fixtures are committed, so
+the Go tests need no Python — the seam is crossed once, at file-production time.
+The payload is a deterministic pattern rather than physics, so a transposed
+layout, swapped real/imaginary parts, byte-order mistake or float32/float64
+confusion each produce a mismatch; against real Green's functions all four would
+produce numbers that still looked like Green's functions.
+
+**Finding: a bank's usable bandwidth is not uniform across its range grid.** At
+2 m the response is still rising with frequency at 600 Hz; at 10 m it has fallen
+a decade and a half and is still falling; at 20 m it stops falling around 400 Hz
+and flattens at ~2e-11 — the *quadrature floor*, not the medium. Synthesising
+from the flat part draws in broadband noise, which inflates a trace's energy
+rather than obviously corrupting its shape. A band limit must be chosen for the
+**longest** range a bank will serve, or the quadrature refined where the
+response is small.
+
+The 300 Hz bank had the opposite fault — it truncated the heel-strike transient,
+giving peak ratios of 0.62 at 10 m. The two errors bracket the right answer from
+either side, and neither is visible without comparing against a model that does
+not share them.
+
+**Cost scaling for bank sizing**: the band limit drives everything
+quadratically, since bins scale with it and the range-spacing limit scales
+inversely. 300 Hz gives 270 ranges over 1–40 m in 9.4 s and 4.2 MB; 600 Hz gives
+333 ranges over 1–25 m in 20.4 s and 5.2 MB.
+
+**Layered physics now reaches the synthesis path.** `Propagation` is an
+interface, so the engine takes either the analytic far-field model or a bank and
+a run can be repeated with better physics and nothing else changed. The bank
+path omits the fore-aft shear deliberately: a bank holds one component, and
+mixing a near-field-correct vertical response with a far-field analytic
+horizontal one would be incoherent. Slice 2's sweep licenses it — varying the
+shear over a factor of twenty moved a walk-past by under a percent.
+
 ### Slice 6 — "characterised"
 
 *Python.*
