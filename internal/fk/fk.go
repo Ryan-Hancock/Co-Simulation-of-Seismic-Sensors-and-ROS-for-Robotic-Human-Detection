@@ -362,3 +362,105 @@ func (m Medium) VerticalDisplacement(r units.Metres, freq float64, opt Integrati
 	}
 	return c/complex(float64(r), 0) + sum, nil
 }
+
+// Grid describes the wavenumber samples an integration will use.
+type Grid struct {
+	KMax    float64
+	Samples int
+}
+
+// GridFor chooses a wavenumber grid that serves every range in a set at one
+// frequency.
+//
+// Three things constrain it, and taking the strictest of the three is what
+// makes one grid usable for all ranges at once — which is the difference
+// between a bank that takes a minute to build and one that takes a week.
+//
+// The upper limit is set by the *shortest* range: near-field terms live at
+// wavenumbers of order 1/r, so a bank that includes close ranges must integrate
+// far out. The spacing is set by the *longest* range, whose J0(k*r) oscillates
+// fastest in k, and by the Rayleigh pole, whose width is about k/(2Q) and which
+// carries most of the far-field energy — stepping over it loses the surface
+// wave entirely.
+func (m Medium) GridFor(ranges []units.Metres, freq float64, opt Integration) (Grid, error) {
+	if len(ranges) == 0 {
+		return Grid{}, fmt.Errorf("fk: no ranges given")
+	}
+	rMin, rMax := math.Inf(1), 0.0
+	for _, r := range ranges {
+		if r <= 0 {
+			return Grid{}, fmt.Errorf("fk: range must be positive, got %g m", r)
+		}
+		rMin = math.Min(rMin, float64(r))
+		rMax = math.Max(rMax, float64(r))
+	}
+	slowest, _ := m.Stack.VelocityBounds()
+	kBody := 2 * math.Pi * freq / float64(slowest)
+
+	kMax := math.Max(opt.kMaxFactor()*kBody, 40/rMin)
+	// Eight samples across the fastest Hankel oscillation.
+	dk := 2 * math.Pi / (8 * rMax)
+	// And four across the Rayleigh pole, whose width is set by attenuation.
+	q := m.qOf(m.Stack.HalfSpace())
+	if kBody > 0 && q > 0 {
+		dk = math.Min(dk, kBody/(2*q)/4)
+	}
+	n := int(math.Ceil(kMax / dk))
+	if opt.Samples > 0 {
+		n = opt.Samples
+	}
+	if n < 64 {
+		n = 64
+	}
+	return Grid{KMax: kMax, Samples: n}, nil
+}
+
+// VerticalDisplacementMulti computes the surface response at many ranges for
+// one frequency, sharing the wavenumber samples between them.
+//
+// This is the whole reason a bank is affordable to build. The expensive part of
+// the calculation — solving the layered boundary-value problem at each
+// wavenumber — does not depend on range at all; only the Hankel weight
+// J0(k*r) does. Computing per range separately repeats every solve once per
+// range, which for a few hundred ranges is a few hundred times the work for no
+// additional information.
+func (m Medium) VerticalDisplacementMulti(ranges []units.Metres, freq float64, opt Integration) ([]complex128, error) {
+	g, err := m.GridFor(ranges, freq, opt)
+	if err != nil {
+		return nil, err
+	}
+	// The static asymptote, subtracted so the oscillatory tail converges.
+	slowest, _ := m.Stack.VelocityBounds()
+	kBody := 2 * math.Pi * freq / float64(slowest)
+	var rMin float64 = math.Inf(1)
+	for _, r := range ranges {
+		rMin = math.Min(rMin, float64(r))
+	}
+	c, err := m.StaticCoefficient(freq, math.Max(200*kBody, 400/rMin))
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]complex128, len(ranges))
+	for i, r := range ranges {
+		out[i] = c / complex(float64(r), 0)
+	}
+
+	dk := g.KMax / float64(g.Samples)
+	for i := 1; i <= g.Samples; i++ {
+		k := float64(i) * dk
+		u, err := m.SurfaceResponse(k, freq)
+		if err != nil {
+			return nil, err
+		}
+		w := 1.0
+		if i == g.Samples {
+			w = 0.5
+		}
+		rem := complex(k, 0)*u - c
+		for j, r := range ranges {
+			out[j] += complex(w*math.J0(k*float64(r))*dk, 0) * rem
+		}
+	}
+	return out, nil
+}
