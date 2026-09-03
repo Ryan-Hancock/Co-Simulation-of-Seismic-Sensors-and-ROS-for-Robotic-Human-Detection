@@ -335,9 +335,79 @@ exactly the interface-error question O2 exists to characterise.
 | **Ships** | A gait that produces a plausible footstep train. |
 | **Exit** | V11. Sensitivity sweep over mass, speed, transient rise time. |
 
+**Status: done.** `cmd/geosweep` runs the sweep; `py/analysis/plot_sweep.py`
+plots it. Reference walk-past — 75 kg at 1.3 m/s passing a sensor at 10 m over
+loam — gives 30 footfalls over 15.4 s, peak 226 µV, 70 dB above the sensor
+floor, against slice 0's 46 µV for a single stance at the same range. Output
+now carries to about 300 Hz where slice 0 had died by 50.
+
 The GRF is the weakest link in the chain (the README says so). Making it a
 slice of its own, with the sensitivity analysis attached, is what turns it
 from a hidden assumption into a stated one.
+
+**Sensitivity, ranked by how far the signal moves:**
+
+| axis | range | RMS | centroid |
+|---|---|---|---|
+| shear velocity | 120–400 m/s | ×15.0 | 64 → 109 Hz |
+| range | 3–30 m | ×4.1 | 109 → 47 Hz |
+| transient peak | 0.05–0.7 BW | ×3.2 | 53 → 88 Hz |
+| body mass | 50–120 kg | ×2.4 | flat |
+| transient rise | 6–30 ms | ×2.4 | 92 → 70 Hz |
+| soil Q | 8–60 | ×1.8 | 44 → 111 Hz |
+| coupling resonance | 15–250 Hz | ×1.7 | 23 → 91 Hz |
+| stance duration | 0.45–0.8 s | ×1.2 | |
+| walking speed | 0.8–1.8 m/s | ×1.0 | |
+| fore-aft shear | 0.02–0.4 BW | ×1.0 | |
+
+**Soil shear velocity dominates by a factor of four.** It is the parameter WP4
+most needs to measure rather than assume, which argues for a refraction survey
+alongside every field recording (§9.1).
+
+**The coupling resonance curve makes the O3 warning quantitative**: below about
+45 Hz it sits inside the band and costs up to 40% of the signal; above it the
+sensor is transparent. A robot-mounted geophone lives near that knee.
+
+**Finding: the fore-aft shear contributes essentially nothing**, for two
+compounding reasons. It radiates with a cos(azimuth) pattern that nulls exactly
+where a walk-past is loudest, and it is a smooth half-cycle over the whole
+stance with no impact transient, so its energy sits at a few hertz where
+propagation and the geophone are both weak. Even head-on it moves the trace by
+a fraction of a percent. Implementing it was not wasted — adding it
+isotropically would have overstated a walk-past and misjudged the in-line case
+the other way — but the vertical force is the whole story here.
+
+**Limitation: walking speed barely matters, and that is about the model, not
+about walking.** Speed lengthens the stride but leaves cadence alone, because
+the gait cycle derives from stance duration and stance duration is an
+independent input; and per-step force is speed-independent. Real walkers do
+neither — cadence rises with speed, stance shortens, peak force climbs from
+~1.1 BW at a stroll to over 1.3 brisk. Sweeping speed meaningfully means
+co-varying all three, which needs force-plate relations WP4 can supply. **This
+is the first thing to fix in the source model.**
+
+**Finding: the taper was swallowing the transient.** The smooth curve's taper
+runs ~60 ms, three times the transient's rise, and taking the transient through
+it suppressed its peak fourfold. The force trace still looked entirely like a
+footstep; only the radiated spectrum would have shown the loss, and by then it
+would have read as a propagation problem.
+
+**Finding: a walk has to be able to end.** An unbounded `Walk` had the engine
+discovering footfalls at ever-increasing range forever and building a Green's
+function for each *inside the real-time loop* — 668 µs per chunk against a
+10 ms budget. Nothing was wrong with the waveform; only the benchmark found it.
+
+**Steady-state cost** (one receiver, 2 kHz, 10 ms chunk, 5 voices live):
+**105 µs per chunk, 1.05% of real time**, against slice 1's 0.075% for a single
+fixed source. Each live contact costs two convolutions — vertical force and the
+radial shear component — and outlives its own stance by the coda still
+arriving.
+
+**Range quantisation**: impulse responses are cached by range at 0.02 m. The
+dominant error is not amplitude, which goes as 1/√r and barely moves, but
+*arrival time* — and WP3 localises from arrival times. 0.02 m is ~0.1 ms, about
+2 cm of localisation error; the 0.1 m first tried would have been 10 cm. Slice
+5's bank replaces this with proper interpolation.
 
 ### Slice 3 — "right at the ranges we actually care about"
 
