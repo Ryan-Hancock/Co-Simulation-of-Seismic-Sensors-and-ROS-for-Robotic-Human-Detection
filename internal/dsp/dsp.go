@@ -212,14 +212,36 @@ func lanczos(x float64, a int) float64 {
 // The transform is taken well above the length kept, so the tail decays into
 // padding rather than wrapping onto the front.
 func CausalImpulseResponse(length int, fs float64, response func(f float64) (complex128, error)) ([]float64, error) {
+	return CausalImpulseResponseAt(0, length, fs, response)
+}
+
+// CausalImpulseResponseAt is CausalImpulseResponse with the transform size
+// given rather than chosen.
+//
+// It exists because a precomputed bank defines its own frequency grid, and a
+// consumer that picks its own would be asking for responses between the bins
+// the bank actually holds. Interpolating in frequency to bridge that is
+// possible but avoidable: the response oscillates in frequency with a period of
+// c/r, which at forty metres is under five hertz, so a grid chosen
+// independently would need interpolating across a curve it barely resolves.
+// Matching the grid removes the question.
+//
+// A transform size of zero keeps the default of four times the kept length,
+// which puts the response's tail into padding rather than wrapping it onto the
+// front.
+func CausalImpulseResponseAt(n, length int, fs float64, response func(f float64) (complex128, error)) ([]float64, error) {
 	if length <= 0 {
 		return nil, fmt.Errorf("dsp: impulse response length must be positive, got %d", length)
 	}
 	if fs <= 0 {
 		return nil, fmt.Errorf("dsp: sample rate must be positive, got %g", fs)
 	}
-
-	n := NextPow2(4 * length)
+	if n == 0 {
+		n = NextPow2(4 * length)
+	}
+	if n < length {
+		return nil, fmt.Errorf("dsp: transform size %d is shorter than the %d samples to keep", n, length)
+	}
 	nyquist := fs / 2
 	taperFrom := 0.8 * nyquist
 

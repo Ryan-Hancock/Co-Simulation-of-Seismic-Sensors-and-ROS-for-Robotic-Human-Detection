@@ -401,3 +401,49 @@ func BenchmarkResponse(b *testing.B) {
 		}
 	}
 }
+
+// A bank's useful bandwidth is not uniform across its range grid, and a bank
+// built to a single band limit will contain quadrature noise wherever
+// attenuation has already taken the true response below it.
+//
+// Measured on a 600 Hz bank over loam: at 2 m the response is still rising with
+// frequency at 600 Hz, at 10 m it has fallen by a decade and a half and is
+// still falling, and at 20 m it stops falling around 400 Hz and flattens at
+// about 2e-11 — the floor of the wavenumber integration, not the medium.
+//
+// The consequence is real. A synthesis driven from the flat part of that curve
+// gets noise instead of signal, and because the noise is broadband it inflates
+// the trace's energy rather than obviously corrupting its shape. A bank should
+// therefore be built either with its band limit chosen for the *longest* range
+// it will serve, or with the quadrature refined where the response is small.
+//
+// This test does not assert a floor value — it asserts that the response is
+// still genuinely decaying across the band the bank claims, which is what has
+// to hold for the bank to be usable at that range.
+func TestResponseDecaysAcrossTheClaimedBand(t *testing.T) {
+	const maxFreq = 100.0
+	b, _ := smallBank(t, 2, 12, 41, maxFreq)
+
+	top := int(maxFreq / b.FrequencyAt(1))
+	for _, r := range []units.Metres{4, 8, 12} {
+		lo, err := b.Response(r, top/4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hi, err := b.Response(r, top)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cmplx.Abs(lo) == 0 || cmplx.Abs(hi) == 0 {
+			t.Fatalf("r=%g m: the bank is empty in the band it claims", r)
+		}
+		// Not a claim about the decay rate, only that the top of the band is
+		// still carrying a response of a believable size rather than a floor.
+		ratio := cmplx.Abs(hi) / cmplx.Abs(lo)
+		t.Logf("r=%4.0f m: |G| at %.0f Hz is %.3f of its value at %.0f Hz",
+			r, b.FrequencyAt(top), ratio, b.FrequencyAt(top/4))
+		if ratio > 10 || ratio < 1e-6 {
+			t.Errorf("r=%g m: response ratio across the band is %.3e, which is not a believable decay", r, ratio)
+		}
+	}
+}

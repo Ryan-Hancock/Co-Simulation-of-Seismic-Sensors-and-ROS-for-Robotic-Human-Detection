@@ -59,7 +59,7 @@ type Engine struct {
 	schedule source.Schedule
 	rx, ry   float64
 
-	gf     green.HalfSpaceGF
+	prop   Propagation
 	sensor responder
 	irLen  int
 	bank   map[int]*pair
@@ -96,17 +96,32 @@ type voice struct {
 	silentAt int64 // sample index after which this voice can contribute nothing
 }
 
+// Propagation describes the model in use, for provenance.
+func (e *Engine) Propagation() string { return e.prop.Describe() }
+
 // NewEngine builds the streaming sensor described by a resolved config,
 // driven by a schedule, emitting chunk samples per call to Next.
 //
 // Impulse responses for the ranges the schedule will visit are built here
 // rather than on demand, so no real-time chunk ever pays for one.
 func NewEngine(res config.Resolved, sch source.Schedule, chunk int) (*Engine, error) {
+	return NewEngineWith(res, sch, chunk, Analytic(green.HalfSpaceGF{Soil: res.Soil}))
+}
+
+// NewEngineWith is NewEngine with the propagation model given.
+//
+// Separate from WithPropagation because the impulse responses are built during
+// construction: a model supplied afterwards would arrive too late to be the one
+// the bank was filled from.
+func NewEngineWith(res config.Resolved, sch source.Schedule, chunk int, prop Propagation) (*Engine, error) {
 	if chunk <= 0 {
 		return nil, fmt.Errorf("sensing: chunk size must be positive, got %d", chunk)
 	}
 	if sch == nil {
 		return nil, fmt.Errorf("sensing: a schedule is required")
+	}
+	if prop == nil {
+		return nil, fmt.Errorf("sensing: a propagation model is required")
 	}
 	if err := res.Sensor.Validate(); err != nil {
 		return nil, err
@@ -124,13 +139,24 @@ func NewEngine(res config.Resolved, sch source.Schedule, chunk int) (*Engine, er
 	if !ok {
 		far = res.Geometry.Range
 	}
+	irLen := int(math.Ceil((far/float64(cr) + 2) * fs))
+	// A bank fixes the transform its responses live on, so the kept impulse
+	// response cannot be longer than that. Three quarters, not all of it: the
+	// last quarter of a circular record is where negative time lives, and
+	// keeping it would reintroduce the acausal pre-ring the truncation exists
+	// to remove. A bank meant for long ranges therefore has to be built with
+	// enough samples for the travel time and coda it will be asked for.
+	if n := prop.TransformSize(); n > 0 && irLen > 3*n/4 {
+		irLen = 3 * n / 4
+	}
+
 	e := &Engine{
 		fs:       fs,
 		chunk:    chunk,
 		schedule: sch,
-		gf:       green.HalfSpaceGF{Soil: res.Soil},
+		prop:     prop,
 		sensor:   res.Sensor,
-		irLen:    int(math.Ceil((far/float64(cr) + 2) * fs)),
+		irLen:    irLen,
 		bank:     map[int]*pair{},
 		forceZ:   make([]float64, chunk),
 		forceR:   make([]float64, chunk),
@@ -167,8 +193,8 @@ func (e *Engine) responseFor(r float64) (*pair, error) {
 	}
 	rq := units.Metres(math.Max(float64(k)*RangeQuantum, RangeQuantum))
 
-	vertical, err := dsp.CausalImpulseResponse(e.irLen, e.fs, func(f float64) (complex128, error) {
-		h, err := e.gf.VelocityResponse(rq, units.Hertz(f))
+	vertical, err := dsp.CausalImpulseResponseAt(e.prop.TransformSize(), e.irLen, e.fs, func(f float64) (complex128, error) {
+		h, err := e.prop.VerticalVelocityResponse(rq, units.Hertz(f))
 		if err != nil {
 			return 0, err
 		}
@@ -177,8 +203,8 @@ func (e *Engine) responseFor(r float64) (*pair, error) {
 	if err != nil {
 		return nil, err
 	}
-	radial, err := dsp.CausalImpulseResponse(e.irLen, e.fs, func(f float64) (complex128, error) {
-		h, err := e.gf.RadialForceResponse(rq, units.Hertz(f))
+	radial, err := dsp.CausalImpulseResponseAt(e.prop.TransformSize(), e.irLen, e.fs, func(f float64) (complex128, error) {
+		h, err := e.prop.RadialForceResponse(rq, units.Hertz(f))
 		if err != nil {
 			return 0, err
 		}
