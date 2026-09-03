@@ -219,10 +219,57 @@ small, and it is the honest record of what is not yet claimed.
 | **Real** | Geophone transfer function + noise (cheap and exact — no reason to fake it). L0 homogeneous half-space, Lamb's problem. Analytic double-hump GRF. |
 | **Fake** | One soil, hard-coded. One foot. Far-field only. No layering, no dispersion, no chunking, no ROS. |
 | **Ships** | `geosynth` CLI: config in, trace file out. Python plots it. |
-| **Exit** | V1, V2, V7, V8, V10. A waveform that looks like a footstep. |
+| **Exit** | V1, V7, V8, V10, plus the eigenfunction checks below. A waveform that looks like a footstep. |
 
-Slice 0 is validated from day one because Lamb's problem *is* its model — the
-oracle and the implementation are the same thing at this level.
+**Status: done.** `cmd/geosynth` runs the chain from a config file;
+`py/analysis/plot_trace.py` plots it. Reference run — 75 kg walker at 10 m over
+loam, SM-24 shunted to 0.7 — gives 846 N peak force, 1.81 µm/s ground velocity,
+46 µV, 56 dB above the sensor's own floor.
+
+**Scope change: V2 moved to slice 3.** Lamb's problem was to be slice 0's
+oracle, but it pins *absolute amplitude in the near field*, and slice 0
+explicitly declares far-field only. Implementing the full Pekeris solution to
+validate a model that does not claim the regime it tests would have been work
+spent in the wrong slice. What replaced it is stronger than a tolerance-fudged
+version of V2 would have been: the excitation is built from the half-space
+Rayleigh eigenfunctions, and those are checked from first principles — both
+free-surface tractions vanish to 1e-12 for every medium tested, and the surface
+ellipticity comes out at 0.681250 against the textbook 0.68127. Absolute scale
+is still unpinned until V2 lands in slice 3; the amplitudes above are
+physically plausible against published footstep measurements but are not yet
+validated.
+
+**Kjartansson, not Futterman.** The plan said "causal complex-velocity
+attenuation" without naming a model. Futterman's logarithmic pairing was tried
+first and rejected on measurement: it is causal only to first order in 1/Q and
+left a percent-level precursor at soil Q values, and its logarithm diverges at
+zero frequency so it needs an arbitrary clamp that breaks the very
+Kramers-Kronig pairing it exists to provide. Kjartansson's constant-Q model is
+exactly causal, needs no clamp, and agrees with the familiar exp(-ωr/2Qc) to
+better than 0.1% above Q≈20.
+
+**Finding: the radiated field is dominated by contact onset, not by the
+peaks.** Velocity response scales as ω^(3/2), so it weights the fastest-changing
+part of the force. The smooth middle of a stance radiates almost nothing and
+the double hump is nearly invisible in the ground motion; what shows is
+heel-strike and toe-off, interfering as a spectral comb at one over the stance
+duration. Two consequences. Slice 0's amplitude is dominated by the taper —
+the least constrained part of the source model, fixed by the momentum
+constraint rather than measured — so it should be read as more provisional than
+the propagation. And slice 2's heel-strike transient will not merely add
+high-frequency content, it will take over the signal.
+
+**Finding: a constant-Q medium has no sharp wavefront.** Phase velocity rises
+without bound with frequency, so the earliest arrival is set by the band limit
+rather than by the physics. Causality is therefore asserted on the impulse
+response (causal to 1e-5 of peak), not on a convolved trace, where the same
+absolute residue can be made to look like anything between a millionth and a
+percent depending on how smooth the source is.
+
+**Finding: beyond ~30 m the arrival becomes ambiguous.** The wavelet has
+dispersed and attenuated enough that the largest peak jumps between lobes and
+apparent velocity stops tracking cR smoothly. Not an artefact to tune away —
+it is the ambiguity WP3's arrival picking will meet on real data.
 
 ### Slice 1 — "it's on the graph"
 
@@ -388,7 +435,8 @@ tested against things with known answers. Each is a Go test, run in CI.
 | # | Target | Known value / source | Tests |
 |---|---|---|---|
 | V1 | Rayleigh velocity, homogeneous Poisson solid | `c_R/β = 0.9194` at ν=0.25 | Secular function + root finder |
-| V2 | Lamb's problem: vertical surface response to vertical surface point force | Closed-form (Pekeris / Mooney) | The entire L0 GF path end-to-end |
+| V2 | Lamb's problem: vertical surface response to vertical surface point force | Closed-form (Pekeris / Mooney) | Absolute amplitude and the near field. **Moved to slice 3** — it tests a regime slice 0 does not claim |
+| V2a | Rayleigh eigenfunctions | Free-surface tractions vanish; ellipticity 0.68127 for a Poisson solid | The excitation, from first principles (slice 0's replacement for V2) |
 | V3 | Layered dispersion curves | Published models; cross-check vs Computer Programs in Seismology / `disba` | `propmat` + `disp` incl. higher modes |
 | V4 | High `f·h` stability | Thomson–Haskell diverges, Dunkin minors do not | The minor formulation specifically |
 | V5 | L1 vs L2 (Go f–k vs Go axisymmetric FDTD) | Agreement to stated tolerance | Independent numerics, same physics |
@@ -400,8 +448,9 @@ tested against things with known answers. Each is a Go test, run in CI.
 | V11 | GRF profile | Force-plate literature: peak BW, hump timing, transient rise | `grf` |
 | V12 | Chunk-boundary continuity | Chunked output ≡ one long trace, to machine precision | Streaming convolution state (§7) |
 
-**Where each lands**: V1, V2, V7, V8, V10 in slice 0; V12 in slice 1; V11 in
-slice 2; V3, V4, V9 in slice 3; V5 in slice 4; V6 in slice 5.
+**Where each lands**: V1, V2a, V7, V8, V10 in slice 0 (done); V12 in slice 1;
+V11 in slice 2 (the profile and momentum checks landed early, with the source
+model); V2, V3, V4, V9 in slice 3; V5 in slice 4; V6 in slice 5.
 
 V2 and V5 are the load-bearing ones. V2 says the analytic path is right; V5
 says the layered path is right by independent numerical route. Everything else
