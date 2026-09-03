@@ -1,0 +1,10 @@
+{
+  "static": [
+    {"parent": "base_link", "child": "geophone_link", "xyz": [0, 0, -0.15], "rpy": [0, 0, 0],
+     "by": "fixed mount on the robot; the sensor sits below the chassis, coupled to the ground"}
+  ],
+  "dynamic": [
+    {"parent": "map", "child": "odom", "by": "localisation (Isaac Sim in co-simulation)"},
+    {"parent": "odom", "child": "base_link", "by": "odometry"}
+  ]
+}

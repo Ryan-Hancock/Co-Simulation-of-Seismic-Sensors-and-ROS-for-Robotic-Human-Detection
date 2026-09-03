@@ -359,26 +359,7 @@ func (g HalfSpaceGF) ImpulseResponse(fs float64, r units.Metres, length int) ([]
 		length = int(math.Ceil((float64(r)/float64(cr) + 2) * fs))
 	}
 
-	// Transformed well above the length actually kept, for two reasons. The
-	// tail beyond the kept window decays into padding instead of wrapping onto
-	// the front, and the small acausal residue — which lives at the end of the
-	// circular record — stays far away from the samples returned.
-	n := dsp.NextPow2(4 * length)
-	nyquist := fs / 2
-	taperFrom := 0.8 * nyquist
-
-	coeff := make([]complex128, n/2+1)
-	for k, f := range dsp.FreqBins(n, fs) {
-		h, err := g.VelocityResponse(r, units.Hertz(f))
-		if err != nil {
-			return nil, err
-		}
-		if f > taperFrom {
-			w := 0.5 * (1 + math.Cos(math.Pi*(f-taperFrom)/(nyquist-taperFrom)))
-			h *= complex(w, 0)
-		}
-		coeff[k] = h
-	}
-	full := dsp.IRFFT(coeff, n)
-	return full[:length], nil
+	return dsp.CausalImpulseResponse(length, fs, func(f float64) (complex128, error) {
+		return g.VelocityResponse(r, units.Hertz(f))
+	})
 }

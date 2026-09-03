@@ -190,3 +190,50 @@ func lanczos(x float64, a int) float64 {
 	px := math.Pi * x
 	return af * math.Sin(px) * math.Sin(px/af) / (px * px)
 }
+
+// CausalImpulseResponse turns a frequency response into a finite causal
+// filter of the given length, sampled at fs.
+//
+// Two things happen here that a naive inverse transform gets wrong, and both
+// have bitten this project already, so they live in one place rather than
+// being reimplemented per caller.
+//
+// The response is tapered to zero over the top fifth of the band. That is the
+// anti-alias filter any real acquisition applies, but the sharper reason is
+// that a causal system which is abruptly band-limited is no longer causal: a
+// rectangular band edge convolves the arrival with a sinc, which rings both
+// ways in time and puts energy before the first arrival.
+//
+// And only the first `length` samples are kept, which discards the negative-
+// time half of the circular record. Whatever pre-ring survives the taper lives
+// there, and truncating it is what makes the returned filter causal by
+// construction rather than approximately.
+//
+// The transform is taken well above the length kept, so the tail decays into
+// padding rather than wrapping onto the front.
+func CausalImpulseResponse(length int, fs float64, response func(f float64) (complex128, error)) ([]float64, error) {
+	if length <= 0 {
+		return nil, fmt.Errorf("dsp: impulse response length must be positive, got %d", length)
+	}
+	if fs <= 0 {
+		return nil, fmt.Errorf("dsp: sample rate must be positive, got %g", fs)
+	}
+
+	n := NextPow2(4 * length)
+	nyquist := fs / 2
+	taperFrom := 0.8 * nyquist
+
+	coeff := make([]complex128, n/2+1)
+	for k, f := range FreqBins(n, fs) {
+		h, err := response(f)
+		if err != nil {
+			return nil, err
+		}
+		if f > taperFrom {
+			w := 0.5 * (1 + math.Cos(math.Pi*(f-taperFrom)/(nyquist-taperFrom)))
+			h *= complex(w, 0)
+		}
+		coeff[k] = h
+	}
+	return IRFFT(coeff, n)[:length], nil
+}

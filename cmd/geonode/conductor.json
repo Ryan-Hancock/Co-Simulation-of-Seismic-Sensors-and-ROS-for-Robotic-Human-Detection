@@ -1,0 +1,11 @@
+{
+  "app": "geonode",
+  "externals": [
+    {
+      "topic": "geophone/chunk",
+      "type": "geosim_msgs/msg/GeophoneChunk",
+      "role": "subscriber",
+      "qos": "sensor"
+    }
+  ]
+}
