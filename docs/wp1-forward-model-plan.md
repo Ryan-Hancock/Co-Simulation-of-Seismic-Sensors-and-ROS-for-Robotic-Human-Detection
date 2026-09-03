@@ -546,6 +546,91 @@ eigenfunctions' energy integrals instead.
 V2 says the analytic path is right; V5 says the layered path is right by a
 route that shares no code with it. These two are the load-bearing validations.
 
+**Status: done. V5 is green.** Extrapolated to zero grid spacing, the two paths
+agree on peak amplitude to **0.1–0.25%** for a half-space and **0.3–0.4%** for a
+strongly layered site, with waveform residuals of **0.07–0.21% rms** and arrival
+times within **30 µs** against travel times of a hundred milliseconds. Nothing
+is shared between them: one expands in wavenumber and integrates a Hankel
+transform, the other steps a stencil forward in time and never forms a
+wavenumber.
+
+**The elastic comparison does not exist, and that decided the design.** With Q
+at 1e9 the Rayleigh pole sits *on* the wavenumber integration path and `GridFor`
+asks for 2.4e11 samples — not a tuning problem but the absence of a principal
+value. So V5 has to run in a lossy medium, and both sides then have to implement
+the *same* loss. Kjartansson's constant-Q law has no finite-difference
+counterpart: a time-domain scheme cannot evaluate a fractional power of
+frequency. Fitting a relaxation spectrum to it leaves a residual that would land
+in the middle of the measurement.
+
+`internal/visco` is the answer: a single standard linear solid, which both paths
+represent exactly. Its Q varies with frequency where a soil's does not, so it is
+a **comparison medium, not a soil** — `fk.Medium.Relax` is nil in production.
+The relaxation is scalar, one multiplier on the whole modulus tensor, so Qp
+equals Qs; independent relaxation of the two moduli costs a second memory
+variable per stress component and changes nothing about whether the two paths
+agree.
+
+**The scheme is first order, not second, and that had to be measured.** The
+free surface is imposed on a single row, which makes it a first-order feature of
+an otherwise second-order stencil — and a Rayleigh wave lives entirely on that
+surface. The discrimination is clean: a **steady surface load reproduces
+Boussinesq to a quarter of a percent at every spacing tried**, so the source
+normalisation, the axis condition and the free surface are each exact; it is
+only the dynamic surface wave that converges linearly. V5 extrapolates two runs
+to zero spacing, and extrapolating with the wrong exponent would overshoot by as
+much as it corrects, so `TestConvergenceIsFirstOrder` pins it rather than
+assuming it.
+
+**Finding, and a defect in the production path: `internal/fk`'s default
+wavenumber sampling is about 2% high at the top of the band, and converges only
+linearly.** The integrand has a near-pole at the Rayleigh wavenumber, where a
+trapezoidal rule is first-order accurate at best; halving `dk` halves the
+remaining error rather than quartering it. Measured at 60 Hz and 16 m: the
+default 7 501 samples give a response 1.9% above the Richardson limit, and
+160 000 are needed to reach a tenth of a percent. **This is the sampling the
+slice 5 bank was built with**, so bank amplitudes carry roughly that error at
+the top of their band. The remedy is a quadrature that subtracts the pole's
+analytic contribution rather than more samples, since more samples buy only
+linear improvement — and that is a change to slice 3's solver with its own
+validation burden, so it is recorded here and left for slice 6 to settle.
+
+**Isolating the measurement from its reference mattered again**, and in exactly
+the way slice 5 recorded. The first comparison plateaued at 3% rms and *stayed
+there under grid refinement*, which reads like a wrong answer in the grid; it
+was the reference being under-converged. With the reference converged the
+residual falls cleanly by a factor of two per halving. That is the second time
+in two slices that the reference, not the thing under test, was the limiting
+error — enough to call it a habit rather than a coincidence.
+
+**A perfectly matched layer absorbs waves, and a static field is not a wave.**
+The Boussinesq check has to be read early or in a large domain: the layer eats
+the static field it cannot absorb, and the displacement drifts downward at a
+rate set by how much of that field lies inside the boundary. At four times the
+furthest receiver the drift is under a percent over the settling window; at
+eleven times it is unmeasurable. For wave propagation the layer measures
+**-70 dB**, comfortably past the -40 dB the tests demand, including for the
+Rayleigh wave that arrives travelling along it — which is what the C-PML's
+frequency shift is for.
+
+**A test whose premise was wrong, recorded because the reason is worth more than
+the test was.** Far-field Rayleigh amplitude falls as one over the square root
+of range, so a peak-amplitude ratio between two ranges ought to show it. It does
+not: the measured exponent is -0.477 and **does not move when the grid is
+halved**, so it is not discretisation. The peak of the composite waveform is not
+the Rayleigh amplitude — near-field and body-wave terms interfere with it, and
+the spectral amplitude at fixed frequency oscillates with range accordingly. The
+1/r geometry is verified by the Boussinesq check instead, which is exact rather
+than asymptotic.
+
+**Recorded limitations.** No lateral heterogeneity and no topography — this is
+L2, and axisymmetry is exact for a vertical point force on horizontal layers but
+cannot be extended. Attenuation in the grid is one relaxation mechanism, so the
+grid cannot reproduce constant Q over a band; production attenuation stays in
+the frequency domain. The memory variables inside the absorbing layer are driven
+by the unstretched strain rate, which is inconsistent at second order — measured
+as harmless by the -70 dB reflection, which is the only thing it could affect.
+
 ### Slice 5 — "fast enough, and it scales"
 
 *Go runtime, Python solver driver.*
@@ -667,6 +752,7 @@ cmd/                     Go CLIs
   geosynth/              synthesise a trace from a config
   geodisp/               dispersion curves + eigenfunctions
   geobank/               build / inspect / validate GF banks
+  geofdtd/               run the grid, and V5 against the f–k path
   geonode/               the Conductor node (slice 1 onward)
 
 internal/                Go, runtime path
@@ -679,7 +765,8 @@ internal/                Go, runtime path
   grf/                   gait phase, GRF profiles, multi-contact scheduling
   geophone/              transfer function, coupling model, noise
   dsp/                   FFT wrapper, streaming convolution, filters
-  fdtd/                  2D axisymmetric elastic solver (L2)
+  fdtd/                  2D axisymmetric viscoelastic solver, C-PML (L2)
+  visco/                 the one relaxation model both paths implement exactly
   trace/                 waveform type + metadata, SAC/miniSEED export
   config/                schema, hashing, provenance
 
@@ -732,7 +819,7 @@ tested against things with known answers. Each is a Go test, run in CI.
 | V2a | Rayleigh eigenfunctions | Free-surface tractions vanish; ellipticity 0.68127 for a Poisson solid | The excitation, from first principles (slice 0's replacement for V2) |
 | V3 | Layered dispersion curves | Published models; cross-check vs Computer Programs in Seismology / `disba` | `propmat` + `disp` incl. higher modes |
 | V4 | High `f·h` stability | Thomson–Haskell diverges, Dunkin minors do not | The minor formulation specifically |
-| V5 | L1 vs L2 (Go f–k vs Go axisymmetric FDTD) | Agreement to stated tolerance | Independent numerics, same physics |
+| V5 | L1 vs L2 (Go f–k vs Go axisymmetric FDTD) | **Green.** Extrapolated to zero spacing: peak amplitude to 0.1–0.25% homogeneous, 0.3–0.4% layered; residual 0.07–0.21% rms; timing within 30 µs | Independent numerics, same physics. Runs in a single-SLS comparison medium both paths represent exactly — the elastic comparison does not exist, the Rayleigh pole sits on the integration path |
 | V6 | L1/L2 vs L3 (external 3D FD) | Agreement over a flat layered domain | The external-solver bridge |
 | V7 | Geophone amplitude + phase response | Datasheet curves | `geophone` transfer function |
 | V8 | Johnson noise PSD | `√(4k_BTR)` | Noise generator statistics |
@@ -743,7 +830,7 @@ tested against things with known answers. Each is a Go test, run in CI.
 
 **Where each lands**: V1, V2a, V7, V8, V10 in slice 0 (done); V12 in slice 1;
 V11 in slice 2 (the profile and momentum checks landed early, with the source
-model); V2, V3, V4, V9 in slice 3; V5 in slice 4; V6 in slice 5.
+model); V2, V3, V4, V9 in slice 3; V5 in slice 4 (green); V6 in slice 5.
 
 V2 and V5 are the load-bearing ones. V2 says the analytic path is right; V5
 says the layered path is right by independent numerical route. Everything else
