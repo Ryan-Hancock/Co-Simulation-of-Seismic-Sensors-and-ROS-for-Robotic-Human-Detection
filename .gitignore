@@ -1,0 +1,20 @@
+# Build output
+/bin/
+*.test
+*.out
+
+# Synthesised traces and figures — regenerable from config
+/out/
+*.npy
+*.png
+*.wav
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
