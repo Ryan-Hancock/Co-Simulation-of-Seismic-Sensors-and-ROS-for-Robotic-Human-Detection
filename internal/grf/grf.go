@@ -48,6 +48,36 @@ type Stance struct {
 	// HumpWidth is the Gaussian half-width of each peak, as a fraction of
 	// stance. Zero uses the default.
 	HumpWidth float64
+	// TransientPeak is the height of the heel-strike transient above the
+	// smooth loading curve, in body weights. Zero uses the default; set it
+	// negative to remove the transient entirely.
+	//
+	// This is the part of the force that matters most and is constrained
+	// least. The smooth double hump is quasi-static and carries almost no
+	// energy above a few hertz; the heel-strike transient is the impact of
+	// the heel, shoe and limb, it rises in tens of milliseconds, and it is
+	// therefore most of what a geophone at range actually sees. Slice 0
+	// showed the point plainly: with only the smooth curve, the radiated
+	// field was dominated by the taper — an artefact of the model rather
+	// than a feature of the gait.
+	//
+	// It is also the parameter most sensitive to footwear and surface, which
+	// makes it a primary domain-randomisation axis for O4 rather than a
+	// constant to be pinned.
+	TransientPeak float64
+	// TransientRise is the time from heel contact to the transient's first
+	// peak. Ten to thirty milliseconds in shod walking; shorter on hard
+	// surfaces and with stiff heels. Zero uses the default.
+	TransientRise units.Seconds
+	// APPeak is the magnitude of the anterior-posterior shear, in body
+	// weights: braking through the first half of stance, propulsion through
+	// the second. Around 0.2 BW. Zero uses the default; negative removes it.
+	//
+	// It is included because a horizontal surface force excites Rayleigh
+	// waves too — with a different radiation pattern and a quarter-cycle
+	// phase shift — and dropping it is a simplification usually made without
+	// being stated.
+	APPeak float64
 	// TaperFraction is the fraction of stance at each end over which the
 	// force rises from and returns to zero. Zero uses the default.
 	//
@@ -62,15 +92,22 @@ type Stance struct {
 // Default profile constants, chosen so that the impulse over a gait cycle
 // comes out right — see ImpulseRatio.
 const (
-	defaultHumpWidth = 0.11
+	defaultHumpWidth     = 0.11
+	defaultTransientPeak = 0.35
+	defaultTransientRise = 0.012
+	defaultAPPeak        = 0.20
 	// defaultTaperFraction is not a free choice: it is the value at which the
-	// reference walker's ImpulseRatio comes out at 1.00004, i.e. at which the
+	// reference walker's ImpulseRatio comes out at 1.0000, i.e. at which the
 	// profile delivers exactly the momentum gravity demands over a gait cycle.
-	// At 0.088 of a 0.62 s stance it is a 55 ms rise, which is also a
-	// physically reasonable loading time for the smooth part of the force.
-	// The constraint picked the number; the plausibility check only confirms
-	// it was allowed to.
-	defaultTaperFraction = 0.088
+	// At 0.098 of a 0.62 s stance it is a 61 ms rise for the quasi-static
+	// part, which is also physiologically reasonable. The constraint picked
+	// the number; the plausibility check only confirms it was allowed to.
+	//
+	// It moved from 0.088 when the heel-strike transient arrived: the
+	// transient carries impulse of its own, so the smooth curve has to give
+	// some back. If the source model changes again, the balance test will say
+	// so rather than letting the error sit unnoticed.
+	defaultTaperFraction = 0.098
 	firstPeakPhase       = 0.25
 	secondPeakPhase      = 0.75
 	// StanceFraction is the share of the gait cycle one foot spends on the
@@ -132,6 +169,85 @@ func (s Stance) taperFraction() float64 {
 	return defaultTaperFraction
 }
 
+func (s Stance) transientPeak() float64 {
+	switch {
+	case s.TransientPeak > 0:
+		return s.TransientPeak
+	case s.TransientPeak < 0:
+		return 0
+	}
+	return defaultTransientPeak
+}
+
+func (s Stance) transientRise() float64 {
+	if s.TransientRise > 0 {
+		return float64(s.TransientRise)
+	}
+	return defaultTransientRise
+}
+
+func (s Stance) apPeak() float64 {
+	switch {
+	case s.APPeak > 0:
+		return s.APPeak
+	case s.APPeak < 0:
+		return 0
+	}
+	return defaultAPPeak
+}
+
+// transientAt is the heel-strike transient at normalised stance phase tau, in
+// body weights.
+//
+// A damped sinusoid starting at heel contact: the impact ringing of the heel
+// pad, shoe and limb against the ground. That shape rather than a single spike
+// because the transient in force-plate records overshoots and then dips before
+// the loading hump takes over, which a one-sided pulse cannot do — and because
+// an oscillation redistributes force in time without adding much impulse,
+// which keeps it from fighting the momentum constraint the smooth curve was
+// fitted under.
+func (s Stance) transientAt(tau float64) float64 {
+	a := s.transientPeak()
+	if a == 0 || tau <= 0 {
+		return 0
+	}
+	// Damping pulls the crest earlier than the quarter period, to 0.2009 of a
+	// cycle, so the period is set from that rather than from a quarter — which
+	// makes TransientRise the time to peak exactly, the quantity force-plate
+	// papers report. The ringing decays over half a cycle: impact transients
+	// are visibly gone within about fifty milliseconds, which a decay equal to
+	// the period would not manage.
+	period := s.transientRise() / transientCrestPhase / float64(s.Duration)
+	decay := period / 2
+	return a / transientCrest * math.Exp(-tau/decay) * math.Sin(2*math.Pi*tau/period)
+}
+
+// The crest of exp(-2u)*sin(2*pi*u) and the phase it occurs at. Dividing by
+// the crest makes TransientPeak the height the transient actually reaches
+// rather than the amplitude of the sinusoid inside it; setting the period from
+// the phase makes TransientRise the time to that peak. Both exist so the two
+// parameters mean what a published force trace would call them.
+const (
+	transientCrest      = 0.63790
+	transientCrestPhase = 0.20090
+)
+
+// AnteriorPosteriorAt is the fore-aft shear at normalised stance phase tau, in
+// body weights: negative (braking) through the first half of stance, positive
+// (propulsion) through the second.
+//
+// A single sine over the stance, which is both a fair approximation of the
+// measured shape and exactly impulse-free over the cycle — as it must be, since
+// a walker holding a steady speed changes no fore-aft momentum from step to
+// step. The taper perturbs that slightly, and the test bounds how much.
+func (s Stance) AnteriorPosteriorAt(tau float64) float64 {
+	a := s.apPeak()
+	if a == 0 || tau <= 0 || tau >= 1 {
+		return 0
+	}
+	return tukey(tau, s.taperFraction()) * -a * math.Sin(2*math.Pi*tau)
+}
+
 // ProfileAt is the vertical force in multiples of body weight at normalised
 // stance phase tau, which runs 0 at heel strike to 1 at toe-off. Outside that
 // interval the foot is in the air and the force is zero.
@@ -150,7 +266,15 @@ func (s Stance) ProfileAt(tau float64) float64 {
 	body := s.MidstanceValley +
 		(s.FirstPeak-s.MidstanceValley)*g1 +
 		(s.SecondPeak-s.MidstanceValley)*g2
-	return tukey(tau, s.taperFraction()) * body
+	// The taper applies to the smooth curve only. It exists to keep the
+	// quasi-static force from starting at a non-zero value, and it is about
+	// fifty-five milliseconds long — three times the transient's rise. Taking
+	// the transient through it as well suppressed its peak fourfold, which
+	// would have quietly removed most of the radiated signal while leaving a
+	// force trace that still looked like a footstep. The transient needs no
+	// taper of its own: a damped sinusoid starting at heel contact is already
+	// zero there, and its fast rise from zero *is* the physical heel strike.
+	return tukey(tau, s.taperFraction())*body + s.transientAt(tau)
 }
 
 // tukey is a raised-cosine taper: zero at the ends, unity across the interior,
@@ -228,6 +352,16 @@ func (s Stance) ImpulseRatio() float64 {
 }
 
 // PeakForce is the largest vertical force during the stance.
+//
+// Scanned rather than taken as the larger of the two hump parameters: the
+// heel-strike transient rings through the loading phase and lifts the first
+// peak slightly above its nominal value, so the two are no longer the same
+// number.
 func (s Stance) PeakForce() units.Newtons {
-	return units.Newtons(math.Max(s.FirstPeak, s.SecondPeak) * float64(s.BodyWeight()))
+	const steps = 20000
+	var peak float64
+	for i := range steps {
+		peak = math.Max(peak, s.ProfileAt((float64(i)+0.5)/steps))
+	}
+	return units.Newtons(peak * float64(s.BodyWeight()))
 }
