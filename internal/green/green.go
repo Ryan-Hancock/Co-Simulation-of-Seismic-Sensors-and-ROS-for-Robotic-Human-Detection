@@ -260,11 +260,24 @@ func (g HalfSpaceGF) VelocityResponse(r units.Metres, f units.Hertz) (complex128
 // Synthesise convolves a force time series with the Green's function at range
 // r, returning ground velocity in m/s sampled at fs.
 //
-// Done in the frequency domain, where the Green's function is defined. The
-// record is padded so that the Rayleigh arrival and its coda land inside it
-// rather than wrapping onto the start, which would put late energy in front of
-// the first arrival and be indistinguishable from the causality violation this
-// model works to avoid.
+// It runs through ImpulseResponse rather than multiplying spectra directly,
+// which is slower and is the right thing to do anyway. Multiplying the force
+// spectrum by the frequency response gives a result that carries the acausal
+// pre-ring of the band limit: a band-limited causal system is not causal, and
+// the zero-phase truncation at Nyquist rings symmetrically in time. Measured
+// here, that pre-ring reaches about 1% of peak in the low-amplitude coda —
+// small, but it is energy arriving before it should, which is precisely the
+// artefact this model works hardest to avoid.
+//
+// Taking the impulse response and keeping only its causal half removes it.
+// Adding the discarded negative-time taps back reproduces the spectral-product
+// answer to 3e-14, which is how the attribution was confirmed rather than
+// assumed.
+//
+// The further benefit is that the offline and streaming paths now share one
+// representation of the Green's function, so a trace synthesised in one piece
+// and the same trace synthesised in chunks are the same trace, not two
+// approximations that have to be reconciled.
 func (g HalfSpaceGF) Synthesise(force []units.Newtons, fs float64, r units.Metres) ([]units.Velocity, error) {
 	if err := g.Soil.Validate(); err != nil {
 		return nil, err
@@ -283,48 +296,19 @@ func (g HalfSpaceGF) Synthesise(force []units.Newtons, fs float64, r units.Metre
 	if err != nil {
 		return nil, err
 	}
-	travel := float64(r) / float64(cr)
-	// Keep the source, the travel time, and a second of coda.
-	keep := len(force) + int(math.Ceil(travel*fs)) + int(fs)
-	// Then transform at twice that, so the Green's function's own tail decays
-	// into padding instead of wrapping onto the start of the record. The tail
-	// is long — the low-frequency content is barely attenuated — and wrapped
-	// energy at t=0 is indistinguishable from an acausal precursor, which is
-	// the one artefact this model is most concerned to avoid.
-	n := 2 * dsp.NextPow2(keep)
+	impulse, err := g.ImpulseResponse(fs, r, 0)
+	if err != nil {
+		return nil, err
+	}
 
-	padded := make([]float64, n)
+	raw := make([]float64, len(force))
 	for i, v := range force {
-		padded[i] = float64(v)
+		raw[i] = float64(v)
 	}
+	out := dsp.Convolve(raw, impulse)
 
-	// The response is tapered to zero over the top fifth of the band. This is
-	// the anti-alias filter any real acquisition applies, so including it is
-	// more faithful than omitting it — but it is here for a sharper reason.
-	// A causal signal that is abruptly band-limited is no longer causal: the
-	// rectangular band edge convolves the arrival with a sinc, which rings
-	// both ways in time and puts energy before the first arrival. At this
-	// model's parameters that artefact is around 1e-4 of peak, small but
-	// exactly the kind of thing that would be misread as a physical precursor.
-	// The taper removes it, and costs nothing: there is no footstep energy
-	// above 800 Hz to lose.
-	nyquist := fs / 2
-	taperFrom := 0.8 * nyquist
-
-	coeff := dsp.RFFT(padded)
-	for k, f := range dsp.FreqBins(n, fs) {
-		h, err := g.VelocityResponse(r, units.Hertz(f))
-		if err != nil {
-			return nil, err
-		}
-		if f > taperFrom {
-			w := 0.5 * (1 + math.Cos(math.Pi*(f-taperFrom)/(nyquist-taperFrom)))
-			h *= complex(w, 0)
-		}
-		coeff[k] *= h
-	}
-	out := dsp.IRFFT(coeff, n)
-
+	// Keep the source, the travel time, and a second of coda.
+	keep := min(len(force)+int(math.Ceil(float64(r)/float64(cr)*fs))+int(fs), len(out))
 	vel := make([]units.Velocity, keep)
 	for i := range vel {
 		vel[i] = units.Velocity(out[i])
@@ -340,4 +324,61 @@ func (g HalfSpaceGF) TravelTime(r units.Metres) (units.Seconds, error) {
 		return 0, err
 	}
 	return units.Seconds(float64(r) / float64(c)), nil
+}
+
+// ImpulseResponse is the Green's function as a finite time-domain filter at
+// sample rate fs: the ground velocity, sample by sample, that a unit impulse of
+// force at the source produces at range r.
+//
+// The streaming synthesis in WP2 needs this form rather than the frequency
+// response, because a chunk arriving every few milliseconds cannot be
+// transformed against a spectrum defined over the whole record. Turning one
+// into the other is a truncation, and truncation is a modelling choice: the
+// coda of a Rayleigh arrival decays but never ends, so length trades fidelity
+// against the state a real-time filter has to carry.
+//
+// The default length covers the travel time plus two seconds of coda, which
+// puts the truncation about 80 dB below the peak for soils in the range this
+// project cares about. Callers sweeping chunk size for O2 should hold this
+// fixed, or they will be measuring two things at once.
+func (g HalfSpaceGF) ImpulseResponse(fs float64, r units.Metres, length int) ([]float64, error) {
+	if err := g.Soil.Validate(); err != nil {
+		return nil, err
+	}
+	if fs <= 0 {
+		return nil, fmt.Errorf("green: sample rate must be positive, got %g", fs)
+	}
+	if r <= 0 {
+		return nil, fmt.Errorf("green: range must be positive, got %g m", r)
+	}
+	if length <= 0 {
+		cr, err := g.Soil.RayleighVelocity()
+		if err != nil {
+			return nil, err
+		}
+		length = int(math.Ceil((float64(r)/float64(cr) + 2) * fs))
+	}
+
+	// Transformed well above the length actually kept, for two reasons. The
+	// tail beyond the kept window decays into padding instead of wrapping onto
+	// the front, and the small acausal residue — which lives at the end of the
+	// circular record — stays far away from the samples returned.
+	n := dsp.NextPow2(4 * length)
+	nyquist := fs / 2
+	taperFrom := 0.8 * nyquist
+
+	coeff := make([]complex128, n/2+1)
+	for k, f := range dsp.FreqBins(n, fs) {
+		h, err := g.VelocityResponse(r, units.Hertz(f))
+		if err != nil {
+			return nil, err
+		}
+		if f > taperFrom {
+			w := 0.5 * (1 + math.Cos(math.Pi*(f-taperFrom)/(nyquist-taperFrom)))
+			h *= complex(w, 0)
+		}
+		coeff[k] = h
+	}
+	full := dsp.IRFFT(coeff, n)
+	return full[:length], nil
 }

@@ -18,3 +18,7 @@ venv/
 # Editor
 .vscode/
 .idea/
+
+# Synthesised traces are regenerable from their config sidecar
+*.csv
+*.csv.json
