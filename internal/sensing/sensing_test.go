@@ -338,26 +338,63 @@ func abs(n int) int {
 	return n
 }
 
-// One receiver's whole cost per chunk, with several voices live. This is the
-// number that scales to a robot carrying an array.
+// cyclic is a schedule that keeps footfalls coming indefinitely, cycling over
+// a small set of ranges. A real walk ends, which makes it useless for a
+// steady-state benchmark: the loop would run millions of chunks past the last
+// footfall and measure an idle engine.
+type cyclic struct {
+	stance grf.Stance
+	period units.Seconds
+	ranges []float64
+}
+
+func (c cyclic) Contacts(from, to units.Seconds) []source.Contact {
+	var out []source.Contact
+	lo := int(math.Ceil(float64(from) / float64(c.period)))
+	hi := int(math.Ceil(float64(to) / float64(c.period)))
+	for n := max(lo, 0); n < hi; n++ {
+		start := units.Seconds(float64(n) * float64(c.period))
+		if start < from || start >= to {
+			continue
+		}
+		out = append(out, source.Contact{
+			ID:      "foot",
+			X:       0,
+			Y:       c.ranges[n%len(c.ranges)],
+			Start:   start,
+			Profile: source.Footfall{Stance: c.stance, Heading: 0},
+		})
+	}
+	return out
+}
+
+// One receiver's whole cost per chunk in steady state, with several voices
+// live at once. This is the number that scales to a robot carrying an array,
+// and the one WP2's real-time budget is spent against.
 func BenchmarkNextDuringWalk(b *testing.B) {
 	c := config.Default()
 	res, err := c.Resolve()
 	if err != nil {
 		b.Fatal(err)
 	}
-	const chunk = 20
-	e, err := NewEngine(res, res.WalkPast(), chunk)
+	sch := cyclic{
+		stance: res.Walker,
+		period: 0.5,
+		ranges: []float64{10, 10.4, 10.9, 11.3, 11.6, 11.2, 10.7, 10.2},
+	}
+	const chunk = 20 // 10 ms at 2 kHz
+	e, err := NewEngine(res, sch, chunk)
 	if err != nil {
 		b.Fatal(err)
 	}
 	buf := make([]float32, chunk)
-	// Advance into the middle of the walk, where the most voices are live.
-	for range 800 {
+	// Run in far enough that the full complement of voices is live.
+	for range 600 {
 		if err := e.Next(buf); err != nil {
 			b.Fatal(err)
 		}
 	}
+	b.ReportMetric(float64(e.ActiveVoices()), "voices")
 	b.ResetTimer()
 	for b.Loop() {
 		if err := e.Next(buf); err != nil {

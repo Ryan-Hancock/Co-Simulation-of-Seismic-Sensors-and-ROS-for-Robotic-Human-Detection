@@ -231,3 +231,40 @@ func TestValidateCatchesImpossibleWalks(t *testing.T) {
 		t.Errorf("Validate rejected a reasonable walk: %v", err)
 	}
 }
+
+// A walk has to be able to end. An engine that pre-builds a Green's function
+// per footfall needs to know there are finitely many; left unbounded it keeps
+// discovering footfalls at ever-increasing range and builds a new response for
+// each, inside the real-time loop. That is not a theoretical concern — it cost
+// a factor of ninety in the per-chunk benchmark before the bound existed.
+func TestWalkCanBeBounded(t *testing.T) {
+	w := walker()
+	w.Until = 5
+
+	all := w.Contacts(0, 100)
+	if len(all) == 0 {
+		t.Fatal("bounded walk produced no contacts")
+	}
+	for _, c := range all {
+		if c.Start >= w.Until {
+			t.Errorf("contact at %g s is past the walk's end at %g s", c.Start, w.Until)
+		}
+	}
+	if got := w.Contacts(w.Until, 100); got != nil {
+		t.Errorf("%d contacts after the walk ended", len(got))
+	}
+	if got := w.Contacts(6, 7); got != nil {
+		t.Errorf("%d contacts well after the walk ended", len(got))
+	}
+	// Unbounded still means unbounded.
+	u := walker()
+	if got := u.Contacts(500, 510); len(got) == 0 {
+		t.Error("an unbounded walk stopped producing contacts")
+	}
+	// And bounding does not change the contacts that do happen.
+	for i, c := range all {
+		if u.ContactAt(i) != c {
+			t.Errorf("contact %d differs when the walk is bounded", i)
+		}
+	}
+}

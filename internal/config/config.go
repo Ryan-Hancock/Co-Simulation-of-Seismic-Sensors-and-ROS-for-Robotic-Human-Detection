@@ -307,6 +307,7 @@ func (r Resolved) WalkPast() source.Walk {
 		StartX: -r.Geometry.ApproachLength,
 		StartY: r.Geometry.Range,
 		Width:  r.Walk.Width,
+		Until:  r.WalkDuration(),
 	}
 }
 

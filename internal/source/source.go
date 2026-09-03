@@ -124,6 +124,13 @@ type Walk struct {
 	Width float64
 	// FirstFoot names the foot that lands first; the other alternates with it.
 	FirstFoot, SecondFoot string
+	// Until is when the walker stops. Zero means they never do.
+	//
+	// A bounded walk is not a convenience: an engine that pre-builds a Green's
+	// function per footfall has to know there are finitely many. Left
+	// unbounded, it discovers new footfalls at ever-increasing range forever
+	// and builds a new response for each, inside the real-time loop.
+	Until units.Seconds
 }
 
 // Defaults for a comfortable walk.
@@ -216,6 +223,12 @@ func (w Walk) Contacts(from, to units.Seconds) []Contact {
 	period := float64(w.StepPeriod())
 	if period <= 0 {
 		return nil
+	}
+	if w.Until > 0 && from >= w.Until {
+		return nil
+	}
+	if w.Until > 0 && to > w.Until {
+		to = w.Until
 	}
 	lo := int(math.Ceil(float64(from) / period))
 	if lo < 0 {
