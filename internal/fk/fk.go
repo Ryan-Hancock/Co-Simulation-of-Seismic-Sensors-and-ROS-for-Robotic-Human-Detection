@@ -30,6 +30,7 @@ import (
 
 	"geosim.dev/geosim/internal/layer"
 	"geosim.dev/geosim/internal/units"
+	"geosim.dev/geosim/internal/visco"
 )
 
 // Medium is a layered half-space with attenuation.
@@ -40,6 +41,15 @@ type Medium struct {
 	RefFreq units.Hertz
 	// DefaultQ is used for layers that do not set one. Zero uses 30.
 	DefaultQ float64
+	// Relax, when set, replaces Kjartansson's constant-Q law with a single
+	// standard linear solid, applied as one scalar relaxation to every layer.
+	//
+	// It exists for slice 4. A finite-difference scheme cannot evaluate a
+	// fractional power of frequency, so the two paths cannot both implement
+	// constant Q exactly; setting this makes them implement the same thing
+	// instead, and any residual disagreement is then propagation rather than
+	// parameterisation. Production runs leave it nil.
+	Relax *visco.SLS
 }
 
 const (
@@ -64,6 +74,19 @@ func (m Medium) qOf(l layer.Layer) float64 {
 	return defaultQ
 }
 
+// poleQ is the quality factor that sets the width of the Rayleigh pole, which
+// is what the wavenumber quadrature has to resolve.
+//
+// With a relaxation model in force it is frequency dependent, and taking the
+// nominal layer Q instead would under-sample the pole wherever the SLS is less
+// lossy than its minimum — which is everywhere except one frequency.
+func (m Medium) poleQ(freq float64) float64 {
+	if m.Relax != nil {
+		return m.Relax.Q(freq)
+	}
+	return m.qOf(m.Stack.HalfSpace())
+}
+
 // complexVelocity applies Kjartansson's constant-Q model: c(omega) =
 // c0*(i*omega/omega0)^gamma with gamma = arctan(1/Q)/pi.
 //
@@ -71,6 +94,12 @@ func (m Medium) qOf(l layer.Layer) float64 {
 // exactly causal, where the more commonly seen logarithmic pairing is causal
 // only to first order in 1/Q and needs an arbitrary low-frequency clamp.
 func (m Medium) complexVelocity(v float64, q, freq float64) complex128 {
+	if m.Relax != nil {
+		if freq <= 0 {
+			return complex(m.Relax.RelaxedVelocity(v, m.refFreq()), 0)
+		}
+		return m.Relax.Velocity(v, m.refFreq(), freq)
+	}
 	if q <= 0 || freq <= 0 {
 		return complex(v, 0)
 	}
@@ -401,7 +430,7 @@ func (m Medium) GridFor(ranges []units.Metres, freq float64, opt Integration) (G
 	// Eight samples across the fastest Hankel oscillation.
 	dk := 2 * math.Pi / (8 * rMax)
 	// And four across the Rayleigh pole, whose width is set by attenuation.
-	q := m.qOf(m.Stack.HalfSpace())
+	q := m.poleQ(freq)
 	if kBody > 0 && q > 0 {
 		dk = math.Min(dk, kBody/(2*q)/4)
 	}
