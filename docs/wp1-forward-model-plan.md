@@ -423,6 +423,61 @@ dominant error is not amplitude, which goes as 1/√r and barely moves, but
 This is the slice that earns "physically grounded" in O1. It is also the one
 most likely to overrun — see the root-finding and near-field risks in §7.
 
+**Status: dispersion done; excitation and f–k integration outstanding.**
+
+Done: `internal/layer` (layered medium), `internal/propmat` (Dunkin minor
+propagator, secular function), `internal/disp` (bracketed root finding, mode
+tracking, group velocity), `cmd/geodisp`, and `py/oracles/dispersion.py`
+generating golden curves into `testdata/dispersion/`.
+
+**V3 satisfied.** The fundamental and first two higher modes match disba to
+**1e-6 relative** across four models over 2–120 Hz — homogeneous, soft-over-
+stiff, a three-layer site, and a low-velocity layer trapped between stiffer
+ones. The homogeneous case also reproduces slice 0's closed-form Rayleigh
+velocity, and disba independently agrees, so three separate routes now concur.
+
+**V4 satisfied, as a demonstration rather than an assertion.** `SecularNaive`
+propagates the solution directly the way Thomson–Haskell does, and the two are
+compared. They agree in sign while both are viable; by f·h = 3000 the direct
+determinant has collapsed to 1e-12 and by 6000 to roundoff *with the wrong
+sign*, while the minor formulation still returns values of order 0.1.
+
+**Finding: the first propagator was wrong and low-frequency tests did not show
+it.** In physical units the motion-stress vector mixes displacements of order
+1 m with stresses of order 10⁸ Pa, so the system matrix spanned sixteen orders
+of magnitude. `det P` came out at 1.003 where a traceless generator guarantees
+exactly 1, and `P(d1)P(d2)` differed from `P(d1+d2)` by a factor of two. None
+of that showed below ~10 Hz, because a thin layer's propagator is near the
+identity and hides its own conditioning — the curves looked right until 20 Hz,
+where the solver began reporting several hundred modes. Non-dimensionalising
+against a reference modulus and the wavenumber fixed it: semigroup error 1.0 →
+5e-15, det to 1 part in 3e9. **The lesson generalises: validate a propagator on
+identities it must satisfy (det, semigroup), not only on outputs that look
+right.**
+
+**Finding: numerical eigendecomposition is unsafe for the boundary condition.**
+Taking the half-space's decaying subspace from `mat.Eigen` produced a secular
+function that flipped sign discontinuously where nothing physical happens — the
+solver may return the two eigenvectors in either order and with either sign,
+and the 2×2 minor inherits that. It looked exactly like an extra root. They are
+now derived in closed form from the evanescent potentials, and vary
+continuously by construction.
+
+**Remaining in this slice:**
+
+1. **Layered eigenfunctions and mode-sum excitation** — the Green's function
+   for a layered medium, replacing slice 0's homogeneous one.
+2. **Full f–k integration** — §2.3's near-field argument. This is the part that
+   makes the model valid at 1–10 m rather than only at 20 m+.
+3. **V2, Lamb's problem** — moved here from slice 0; still the only check on
+   absolute amplitude.
+4. **V9 for layered media** — causality with the layered Green's function.
+
+**Noted:** group velocity is computed by finite difference on the phase curve,
+which goes noisy near mode osculations where dc/df is steep. Adequate for
+plotting; if WP3 needs group arrival times it should be computed from the
+eigenfunctions' energy integrals instead.
+
 ### Slice 4 — "independently verified"
 
 *Go.*
