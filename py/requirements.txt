@@ -1,0 +1,7 @@
+# Pinned so a golden file can be traced to the code that produced it.
+# Python owns the offline half of this project: oracles, analysis, figures.
+# It never runs in the seismic runtime path — see the language seam rule in
+# docs/wp1-forward-model-plan.md.
+disba==0.7.0
+numpy==2.5.2
+matplotlib==3.10.7
