@@ -55,7 +55,7 @@ func newNode(t *testing.T) (*Geophone, config.Resolved, int) {
 		t.Fatal(err)
 	}
 	chunk := int(res.Sampling.Rate / chunkRateHz)
-	engine, err := sensing.NewEngine(res, chunk)
+	engine, err := sensing.NewEngine(res, res.WalkPast(), chunk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestPublishedStreamReassemblesToTheOfflineTrace(t *testing.T) {
 		}
 	}
 
-	want, err := sensing.Reference(res, len(stitched))
+	want, err := sensing.Reference(res, res.WalkPast(), len(stitched))
 	if err != nil {
 		t.Fatal(err)
 	}

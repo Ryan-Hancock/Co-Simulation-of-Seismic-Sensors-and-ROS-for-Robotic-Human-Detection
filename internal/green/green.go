@@ -363,3 +363,67 @@ func (g HalfSpaceGF) ImpulseResponse(fs float64, r units.Metres, length int) ([]
 		return g.VelocityResponse(r, units.Hertz(f))
 	})
 }
+
+// RadialForceResponse is the vertical ground velocity at range r per newton of
+// *horizontal* force at the source, directed along the source-to-receiver line,
+// in (m/s)/N.
+//
+// A horizontal surface force excites Rayleigh waves as readily as a vertical
+// one, and dropping it is a simplification usually made silently. Two things
+// distinguish it, and both fall out of the eigenfunctions rather than being
+// put in by hand.
+//
+// The amplitude is the vertical-force response scaled by the surface
+// ellipticity — the ratio of horizontal to vertical mode shape at z=0, about
+// 0.68 for a Poisson solid. A vertical force couples through the vertical
+// eigenfunction twice; a horizontal force couples through the horizontal one
+// at the source and the vertical one at the receiver.
+//
+// And it arrives a quarter cycle out of phase, because the horizontal
+// eigenfunction leads the vertical by ninety degrees. That is the same fact as
+// Rayleigh particle motion being elliptical rather than linear, and it means
+// the fore-aft and vertical contributions of one footstep do not simply add:
+// they interfere, with a sign that depends on which way the walker is facing.
+func (g HalfSpaceGF) RadialForceResponse(r units.Metres, f units.Hertz) (complex128, error) {
+	vertical, err := g.VelocityResponse(r, f)
+	if err != nil || vertical == 0 {
+		return 0, err
+	}
+	e, err := NewEigenfunctions(g.Soil, 2*math.Pi*float64(f))
+	if err != nil {
+		return 0, err
+	}
+	// The factor of i is the quarter-cycle lead the horizontal eigenfunction
+	// carries; the ratio is signed, so a medium whose mode shape reverses is
+	// handled without a special case.
+	return 1i * complex(e.Horizontal(0)/e.Vertical(0), 0) * vertical, nil
+}
+
+// ResponseToForce is the vertical ground velocity at a receiver displaced by
+// (dx, dy) metres from the source, per unit of the force vector (fx, fy, fz)
+// newtons, at frequency f.
+//
+// It projects the horizontal force onto the source-to-receiver line, because
+// only the radial component drives the Rayleigh wave's vertical motion: the
+// transverse component excites Love waves, which have no vertical component at
+// all. That cos(azimuth) pattern is why a walker's fore-aft shear contributes
+// strongly to a sensor ahead of or behind them and nothing to one directly
+// abeam.
+func (g HalfSpaceGF) ResponseToForce(dx, dy float64, force [3]float64, f units.Hertz) (complex128, error) {
+	r := math.Hypot(dx, dy)
+	if r <= 0 {
+		return 0, fmt.Errorf("green: receiver coincides with the source")
+	}
+	vert, err := g.VelocityResponse(units.Metres(r), f)
+	if err != nil {
+		return 0, err
+	}
+	radial, err := g.RadialForceResponse(units.Metres(r), f)
+	if err != nil {
+		return 0, err
+	}
+	// Unit vector from source to receiver; the radial force component is the
+	// horizontal force projected onto it.
+	fRadial := (force[0]*dx + force[1]*dy) / r
+	return complex(force[2], 0)*vert + complex(fRadial, 0)*radial, nil
+}

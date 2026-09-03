@@ -24,6 +24,8 @@ import (
 
 	"geosim.dev/geosim/internal/config"
 	"geosim.dev/geosim/internal/green"
+	"geosim.dev/geosim/internal/sensing"
+	"geosim.dev/geosim/internal/source"
 	"geosim.dev/geosim/internal/units"
 )
 
@@ -73,25 +75,47 @@ func run() error {
 		return err
 	}
 
-	// The chain, in the order the physics runs.
-	force, err := res.Walker.Sample(res.Sampling.Rate, units.Seconds(res.Sampling.Lead), units.Seconds(res.Sampling.Tail))
+	// A walk past the sensor: each footfall lands somewhere different, so each
+	// has its own range and its own arrival. The rise and fall that produces is
+	// the signature, not an artefact of it.
+	walk := res.WalkPast()
+	if err := walk.Validate(); err != nil {
+		return err
+	}
+	fs := res.Sampling.Rate
+	n := int((float64(res.WalkDuration()) + res.Sampling.Tail) * fs)
+
+	raw, err := sensing.Reference(res, walk, n)
 	if err != nil {
 		return err
+	}
+	volts := make([]units.Volts, len(raw))
+	for i, v := range raw {
+		volts[i] = units.Volts(v)
 	}
 
-	gf := green.HalfSpaceGF{Soil: res.Soil}
-	velocity, err := gf.Synthesise(force, res.Sampling.Rate, units.Metres(res.Geometry.Range))
-	if err != nil {
-		return err
+	// The total vertical force on the ground, summed over whatever feet are
+	// down, recorded alongside so the trace can be read against its own source.
+	force := make([]units.Newtons, len(raw))
+	nearest := make([]float64, len(raw))
+	for i := range nearest {
+		nearest[i] = math.Inf(1)
 	}
-
-	raw := make([]float64, len(velocity))
-	for i, v := range velocity {
-		raw[i] = float64(v)
+	for _, c := range walk.Contacts(0, units.Seconds(float64(n)/fs)) {
+		r := math.Hypot(c.X, c.Y)
+		for i := range force {
+			at := units.Seconds(float64(i) / fs)
+			f := c.ForceAt(at)
+			force[i] += units.Newtons(f[2])
+			if f[2] != 0 && r < nearest[i] {
+				nearest[i] = r
+			}
+		}
 	}
-	volts, err := res.Sensor.Apply(raw, res.Sampling.Rate)
-	if err != nil {
-		return err
+	for i, v := range nearest {
+		if math.IsInf(v, 1) {
+			nearest[i] = 0
+		}
 	}
 
 	// Sensor noise is added after the transfer function, because that is where
@@ -104,7 +128,7 @@ func run() error {
 		}
 	}
 
-	if err := writeCSV(*outPath, res, force, velocity, volts, noise); err != nil {
+	if err := writeCSV(*outPath, res, force, nearest, volts, noise); err != nil {
 		return err
 	}
 	if err := writeSidecar(*outPath+".json", res, hash); err != nil {
@@ -112,12 +136,12 @@ func run() error {
 	}
 
 	if !*quiet {
-		printSummary(res, hash, gf, force, velocity, volts, *outPath)
+		printSummary(res, hash, walk, force, volts, *outPath)
 	}
 	return nil
 }
 
-func writeCSV(path string, res config.Resolved, force []units.Newtons, vel []units.Velocity, volts, noise []units.Volts) error {
+func writeCSV(path string, res config.Resolved, force []units.Newtons, rangeM []float64, volts, noise []units.Volts) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -127,7 +151,7 @@ func writeCSV(path string, res config.Resolved, force []units.Newtons, vel []uni
 	w := csv.NewWriter(f)
 	defer w.Flush()
 
-	header := []string{"t_s", "force_n", "velocity_mps", "volts"}
+	header := []string{"t_s", "force_n", "range_m", "volts"}
 	if noise != nil {
 		header = append(header, "noise_v")
 	}
@@ -145,7 +169,7 @@ func writeCSV(path string, res config.Resolved, force []units.Newtons, vel []uni
 		if i < len(force) {
 			fN = float64(force[i])
 		}
-		row := []string{g(float64(i) * dt), g(fN), g(float64(vel[i])), g(float64(volts[i]))}
+		row := []string{g(float64(i) * dt), g(fN), g(rangeM[i]), g(float64(volts[i]))}
 		if noise != nil {
 			row = append(row, g(float64(noise[i])))
 		}
@@ -173,8 +197,9 @@ func writeSidecar(path string, res config.Resolved, hash string) error {
 	}{hash, res})
 }
 
-func printSummary(res config.Resolved, hash string, gf green.HalfSpaceGF, force []units.Newtons, vel []units.Velocity, volts []units.Volts, out string) {
+func printSummary(res config.Resolved, hash string, walk source.Walk, force []units.Newtons, volts []units.Volts, out string) {
 	cr, _ := res.Soil.RayleighVelocity()
+	gf := green.HalfSpaceGF{Soil: res.Soil}
 	travel, _ := gf.TravelTime(units.Metres(res.Geometry.Range))
 
 	peak := func(f func(int) float64, n int) float64 {
@@ -185,7 +210,6 @@ func printSummary(res config.Resolved, hash string, gf green.HalfSpaceGF, force 
 		return m
 	}
 	peakF := peak(func(i int) float64 { return float64(force[i]) }, len(force))
-	peakV := peak(func(i int) float64 { return float64(vel[i]) }, len(vel))
 	peakE := peak(func(i int) float64 { return float64(volts[i]) }, len(volts))
 
 	fmt.Fprintf(os.Stderr, "config   %s\n", hash[:16])
@@ -194,9 +218,11 @@ func printSummary(res config.Resolved, hash string, gf green.HalfSpaceGF, force 
 		res.Walker.Mass, res.Walker.Duration, res.Walker.ImpulseRatio())
 	fmt.Fprintf(os.Stderr, "sensor   f0=%.1f Hz  damping %.3f  shunt %.0f ohm  floor %.2g (m/s)/rtHz\n",
 		res.Sensor.NaturalFreq, res.Sensor.Damping(), res.Sensor.ShuntResistance, res.Sensor.NoiseDensityInVelocity())
-	fmt.Fprintf(os.Stderr, "geometry %.1f m, travel %.4f s\n", res.Geometry.Range, travel)
-	fmt.Fprintf(os.Stderr, "peaks    force %.1f N -> ground %.3g m/s (%.2f um/s) -> %.4g V\n",
-		peakF, peakV, peakV*1e6, peakE)
+	fmt.Fprintf(os.Stderr, "walk     %.2f m/s, step %.3f s, stride %.2f m, %d footfalls over %.1f s\n",
+		res.Walk.Speed, walk.StepPeriod(), walk.StrideOrDefault(),
+		len(walk.Contacts(0, res.WalkDuration())), res.WalkDuration())
+	fmt.Fprintf(os.Stderr, "geometry closest approach %.1f m, travel %.4f s\n", res.Geometry.Range, travel)
+	fmt.Fprintf(os.Stderr, "peaks    force %.1f N -> %.4g V\n", peakF, peakE)
 	if res.Noise.Enabled {
 		fmt.Fprintf(os.Stderr, "         signal-to-noise at peak: %.0f dB above the sensor's own floor\n",
 			20*math.Log10(peakE/(res.Sensor.NoiseDensity()*math.Sqrt(res.Sampling.Rate/2))))

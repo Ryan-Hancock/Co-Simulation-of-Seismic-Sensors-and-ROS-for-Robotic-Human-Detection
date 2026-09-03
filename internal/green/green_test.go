@@ -457,3 +457,115 @@ func BenchmarkSynthesise(b *testing.B) {
 		}
 	}
 }
+
+// A horizontal force excites the Rayleigh wave through the horizontal
+// eigenfunction at the source and the vertical one at the receiver, where a
+// vertical force uses the vertical one twice. So the amplitude ratio between
+// them is the surface ellipticity, and the phase differs by exactly a quarter
+// cycle. Both are consequences of the mode shapes, not choices.
+func TestRadialForceResponseIsEllipticityTimesQuarterCycle(t *testing.T) {
+	for name, h := range map[string]soil.HalfSpace{
+		"Poisson solid": soil.PoissonSolid(200, 1900),
+		"dry sand":      soil.DrySand(),
+		"loam":          soil.Loam(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := HalfSpaceGF{Soil: h}
+			for _, f := range []units.Hertz{5, 20, 100} {
+				vert, err := g.VelocityResponse(10, f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rad, err := g.RadialForceResponse(10, f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				e, err := NewEigenfunctions(h, 2*math.Pi*float64(f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := cmplx.Abs(rad)/cmplx.Abs(vert), e.Ellipticity(); math.Abs(got-want) > 1e-12 {
+					t.Errorf("%g Hz: amplitude ratio %g, want the ellipticity %g", f, got, want)
+				}
+				dphase := (cmplx.Phase(rad) - cmplx.Phase(vert)) * 180 / math.Pi
+				for dphase > 180 {
+					dphase -= 360
+				}
+				for dphase < -180 {
+					dphase += 360
+				}
+				if math.Abs(math.Abs(dphase)-90) > 1e-9 {
+					t.Errorf("%g Hz: phase difference %g degrees, want a quarter cycle", f, dphase)
+				}
+			}
+		})
+	}
+	// For a Poisson solid the ratio is the textbook 0.68127.
+	g := HalfSpaceGF{Soil: soil.PoissonSolid(200, 1900)}
+	v, _ := g.VelocityResponse(10, 20)
+	r, _ := g.RadialForceResponse(10, 20)
+	if got := cmplx.Abs(r) / cmplx.Abs(v); math.Abs(got-0.68127) > 1e-4 {
+		t.Errorf("Poisson solid ratio %.6f, want 0.68127", got)
+	}
+}
+
+// Only the radial component of a horizontal force drives the Rayleigh wave's
+// vertical motion. The transverse component excites Love waves, which have no
+// vertical component at all, so a sensor directly abeam of a walker hears
+// nothing from their fore-aft shear.
+func TestHorizontalForceFollowsCosineAzimuth(t *testing.T) {
+	g := HalfSpaceGF{Soil: soil.Loam()}
+	const (
+		r = 10.0
+		f = 20.0
+	)
+	// A horizontal force along +x, receiver swept around the source.
+	force := [3]float64{1, 0, 0}
+	inline, err := g.ResponseToForce(r, 0, force, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name       string
+		dx, dy     float64
+		wantFactor float64
+	}{
+		{"in line, ahead", r, 0, 1},
+		{"in line, behind", -r, 0, -1},
+		{"abeam", 0, r, 0},
+		{"forty-five degrees", r / math.Sqrt2, r / math.Sqrt2, 1 / math.Sqrt2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := g.ResponseToForce(c.dx, c.dy, force, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := complex(c.wantFactor, 0) * inline
+			if d := cmplx.Abs(got - want); d > 1e-12*cmplx.Abs(inline)+1e-30 {
+				t.Errorf("response %v, want %v (cos azimuth = %g)", got, want, c.wantFactor)
+			}
+		})
+	}
+}
+
+// A pure vertical force must reproduce VelocityResponse exactly, whatever the
+// azimuth, since a vertical force has no direction in the horizontal plane.
+func TestResponseToForceMatchesVerticalResponse(t *testing.T) {
+	g := HalfSpaceGF{Soil: soil.Loam()}
+	want, err := g.VelocityResponse(10, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range [][2]float64{{10, 0}, {0, 10}, {-6, 8}, {8, -6}} {
+		got, err := g.ResponseToForce(p[0], p[1], [3]float64{0, 0, 1}, 25)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cmplx.Abs(got-want) > 1e-18 {
+			t.Errorf("offset %v: %v, want %v", p, got, want)
+		}
+	}
+	if _, err := g.ResponseToForce(0, 0, [3]float64{0, 0, 1}, 25); err == nil {
+		t.Error("expected an error when the receiver coincides with the source")
+	}
+}

@@ -124,8 +124,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	walk := res.WalkPast()
+	if err := walk.Validate(); err != nil {
+		slog.Error("geonode: invalid walk", "err", err)
+		os.Exit(1)
+	}
 	chunk := int(res.Sampling.Rate / chunkRateHz)
-	engine, err := sensing.NewEngine(res, chunk)
+	engine, err := sensing.NewEngine(res, walk, chunk)
 	if err != nil {
 		slog.Error("geonode: building the sensing engine", "err", err)
 		os.Exit(1)
@@ -137,7 +142,11 @@ func main() {
 		"range_m", res.Geometry.Range,
 		"sample_rate_hz", res.Sampling.Rate,
 		"chunk_samples", chunk,
-		"chunk_ms", float64(chunk)/res.Sampling.Rate*1000)
+		"chunk_ms", float64(chunk)/res.Sampling.Rate*1000,
+		"closest_approach_m", res.Geometry.Range,
+		"walk_speed_mps", res.Walk.Speed,
+		"step_period_s", walk.StepPeriod(),
+		"walk_duration_s", res.WalkDuration())
 
 	conductor.Run(&Geophone{
 		engine:  engine,

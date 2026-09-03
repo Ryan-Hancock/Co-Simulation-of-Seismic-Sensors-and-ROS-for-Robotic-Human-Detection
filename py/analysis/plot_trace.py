@@ -40,6 +40,18 @@ def spectrum(x, fs):
     return np.fft.rfftfreq(len(x), 1 / fs), np.abs(np.fft.rfft(x * w)) * scale
 
 
+def rng_min(cols):
+    """Closest approach, ignoring the samples with no foot down."""
+    if "range_m" not in cols:
+        return None
+    live = cols["range_m"][cols["range_m"] > 0]
+    return float(np.min(live)) if live.size else None
+
+
+def rng_label(r):
+    return "unknown range" if r is None else f"{r:.1f} m"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace", help="CSV written by geosynth")
@@ -55,37 +67,44 @@ def main():
     geom = res.get("geometry", {})
     rng = geom.get("range_m", float("nan"))
 
-    fig, ax = plt.subplots(4, 1, figsize=(10, 11))
+    fig, ax = plt.subplots(4, 1, figsize=(11, 12))
 
-    ax[0].plot(t, cols["force_n"], lw=1.2, color="#B3261E")
+    ax[0].plot(t, cols["force_n"], lw=0.9, color="#B3261E")
     ax[0].set_ylabel("force (N)")
-    ax[0].set_title("ground reaction force — one stance, vertical component")
+    ax[0].set_title("total vertical ground reaction force — both feet, one walk past")
+    if "range_m" in cols:
+        # Range to the loaded foot, on its own axis: the rise and fall of the
+        # trace below is this curve, not anything in the gait.
+        rax = ax[0].twinx()
+        rng = np.where(cols["range_m"] > 0, cols["range_m"], np.nan)
+        rax.plot(t, rng, lw=1.2, color="#666666", ls="--")
+        rax.set_ylabel("range to loaded foot (m)", color="#666666")
+        rax.tick_params(axis="y", colors="#666666")
 
-    ax[1].plot(t, cols["velocity_mps"] * 1e6, lw=0.9, color="#1B5E9C")
-    ax[1].set_ylabel("ground velocity (µm/s)")
-    ax[1].set_title(f"vertical ground velocity at {rng:g} m")
-
-    ax[2].plot(t, cols["volts"] * 1e6, lw=0.9, color="#1B5E20")
+    ax[1].plot(t, cols["volts"] * 1e6, lw=0.6, color="#1B5E20")
     if "noise_v" in cols:
-        # The sensor's own floor, for scale: it is far below the signal, which
-        # is the point worth seeing rather than asserting.
-        ax[2].plot(t, cols["noise_v"] * 1e6, lw=0.5, color="#999999", label="sensor noise only")
-        ax[2].legend(loc="upper right", fontsize=8)
+        ax[1].plot(t, cols["noise_v"] * 1e6, lw=0.4, color="#BBBBBB", label="sensor noise only")
+        ax[1].legend(loc="upper right", fontsize=8)
+    ax[1].set_ylabel("geophone output (µV)")
+    ax[1].set_title(f"geophone output — closest approach {rng_label(rng_min(cols))}")
+
+    # One footfall, close up. The heel-strike transient is the whole reason the
+    # signal has any high-frequency content, so it is worth seeing on its own.
+    peak = int(np.argmax(np.abs(cols["volts"])))
+    lo, hi = max(0, peak - int(0.15 * fs)), min(len(t), peak + int(0.45 * fs))
+    ax[2].plot(t[lo:hi], cols["volts"][lo:hi] * 1e6, lw=1.0, color="#1B5E20")
     ax[2].set_ylabel("geophone output (µV)")
     ax[2].set_xlabel("time (s)")
-    ax[2].set_title("geophone output")
+    ax[2].set_title("one footfall, close up — the heel-strike transient and its coda")
 
     for a in ax[:3]:
         a.grid(alpha=0.25)
         a.margins(x=0)
 
-    # Spectra, to show where the energy actually sits. The source is smooth, so
-    # slice 0's content is low — the heel-strike transient that carries the
-    # high frequencies is slice 2.
     f, fspec = spectrum(cols["force_n"], fs)
-    _, vspec = spectrum(cols["velocity_mps"], fs)
+    _, vspec = spectrum(cols["volts"], fs)
     ax[3].loglog(f[1:], fspec[1:] / np.max(fspec[1:]), lw=1.0, color="#B3261E", label="force")
-    ax[3].loglog(f[1:], vspec[1:] / np.max(vspec[1:]), lw=1.0, color="#1B5E9C", label="ground velocity")
+    ax[3].loglog(f[1:], vspec[1:] / np.max(vspec[1:]), lw=1.0, color="#1B5E20", label="geophone output")
     ax[3].set_xlim(0.5, fs / 2)
     ax[3].set_ylim(1e-6, 2)
     ax[3].set_xlabel("frequency (Hz)")
@@ -100,7 +119,7 @@ def main():
     )
     if "config_hash" in meta:
         subtitle += f"   ·   config {meta['config_hash'][:16]}"
-    fig.suptitle(f"geosynth — slice 0\n{subtitle}", fontsize=10)
+    fig.suptitle(f"geosynth — walk past a geophone\n{subtitle}", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(args.out, dpi=130)
     print(f"wrote {args.out}", file=sys.stderr)

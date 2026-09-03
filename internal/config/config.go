@@ -23,6 +23,7 @@ import (
 	"geosim.dev/geosim/internal/geophone"
 	"geosim.dev/geosim/internal/grf"
 	"geosim.dev/geosim/internal/soil"
+	"geosim.dev/geosim/internal/source"
 	"geosim.dev/geosim/internal/units"
 )
 
@@ -32,6 +33,7 @@ type Config struct {
 	Walker   WalkerSpec `json:"walker"`
 	Sensor   SensorSpec `json:"sensor"`
 	Geometry Geometry   `json:"geometry"`
+	Walk     WalkSpec   `json:"walk"`
 	Sampling Sampling   `json:"sampling"`
 	Noise    NoiseSpec  `json:"noise"`
 }
@@ -71,9 +73,27 @@ type SensorSpec struct {
 	OpenCircuitDamped float64 `json:"open_circuit_damping,omitempty"`
 }
 
+// Geometry places the walker relative to the sensor.
+//
+// The sensor sits at the origin and the walker travels along a line offset by
+// Range, so Range is the closest approach rather than a fixed separation. That
+// is the geometry WP4 will actually record: a walk-past, whose rise and fall
+// comes from the changing range to each footfall.
 type Geometry struct {
-	// Range is the source-to-receiver distance.
+	// Range is the perpendicular distance from the walking line to the
+	// sensor, in metres — the closest the walker gets.
 	Range float64 `json:"range_m"`
+	// ApproachLength is how far along the path the walk starts before, and
+	// ends after, closest approach. Zero uses ten metres.
+	ApproachLength float64 `json:"approach_length_m,omitempty"`
+}
+
+// WalkSpec describes the gait as motion rather than as a single stance.
+type WalkSpec struct {
+	// Speed in metres per second. Zero uses a comfortable 1.3.
+	Speed float64 `json:"speed_mps,omitempty"`
+	// Width is the lateral separation between the feet. Zero uses 0.12 m.
+	Width float64 `json:"stance_width_m,omitempty"`
 }
 
 type Sampling struct {
@@ -94,7 +114,8 @@ func Default() Config {
 		Soil:     SoilSpec{Preset: "loam"},
 		Walker:   WalkerSpec{Mass: 75, StanceDuration: 0.62, FirstPeak: 1.15, SecondPeak: 1.12, MidstanceValley: 0.75},
 		Sensor:   SensorSpec{Preset: "sm24", TargetDamping: 0.7},
-		Geometry: Geometry{Range: 10},
+		Geometry: Geometry{Range: 10, ApproachLength: 10},
+		Walk:     WalkSpec{Speed: 1.3, Width: 0.12},
 		Sampling: Sampling{Rate: 2000, Lead: 0.2, Tail: 1.0},
 		Noise:    NoiseSpec{Enabled: true, Seed: 1},
 	}
@@ -125,6 +146,7 @@ type Resolved struct {
 	Walker   grf.Stance        `json:"walker"`
 	Sensor   geophone.Geophone `json:"sensor"`
 	Geometry Geometry          `json:"geometry"`
+	Walk     WalkSpec          `json:"walk"`
 	Sampling Sampling          `json:"sampling"`
 	Noise    NoiseSpec         `json:"noise"`
 }
@@ -227,7 +249,25 @@ func (c Config) Resolve() (Resolved, error) {
 	if c.Sampling.Lead < 0 || c.Sampling.Tail < 0 {
 		return r, fmt.Errorf("config: lead and tail must not be negative, got %g and %g s", c.Sampling.Lead, c.Sampling.Tail)
 	}
-	r.Geometry, r.Sampling, r.Noise = c.Geometry, c.Sampling, c.Noise
+	if c.Geometry.ApproachLength < 0 {
+		return r, fmt.Errorf("config: approach length must not be negative, got %g m", c.Geometry.ApproachLength)
+	}
+	if c.Walk.Speed < 0 {
+		return r, fmt.Errorf("config: walking speed must not be negative, got %g m/s", c.Walk.Speed)
+	}
+	if c.Walk.Width < 0 {
+		return r, fmt.Errorf("config: stance width must not be negative, got %g m", c.Walk.Width)
+	}
+	r.Geometry, r.Walk, r.Sampling, r.Noise = c.Geometry, c.Walk, c.Sampling, c.Noise
+	if r.Geometry.ApproachLength == 0 {
+		r.Geometry.ApproachLength = 10
+	}
+	if r.Walk.Speed == 0 {
+		r.Walk.Speed = 1.3
+	}
+	if r.Walk.Width == 0 {
+		r.Walk.Width = 0.12
+	}
 	return r, nil
 }
 
@@ -255,4 +295,22 @@ func Parse(data []byte) (Config, error) {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	return c, nil
+}
+
+// WalkPast builds the walk this configuration describes: the sensor at the
+// origin, the walker travelling along +x on a line offset by Range, starting
+// ApproachLength before closest approach.
+func (r Resolved) WalkPast() source.Walk {
+	return source.Walk{
+		Stance: r.Walker,
+		Speed:  r.Walk.Speed,
+		StartX: -r.Geometry.ApproachLength,
+		StartY: r.Geometry.Range,
+		Width:  r.Walk.Width,
+	}
+}
+
+// WalkDuration is how long the walker takes to cross the configured path.
+func (r Resolved) WalkDuration() units.Seconds {
+	return units.Seconds(2 * r.Geometry.ApproachLength / r.Walk.Speed)
 }
