@@ -402,3 +402,98 @@ func BenchmarkNextDuringWalk(b *testing.B) {
 		}
 	}
 }
+
+// The fore-aft shear radiates with a cos(azimuth) pattern about the
+// source-to-receiver line, so it nulls for a sensor directly abeam of the
+// walker and is strongest for one ahead or behind.
+//
+// That has a consequence the sensitivity sweep found and this pins: for a
+// walk-past, the shear contributes almost nothing. The signal is dominated by
+// the footfalls near closest approach, and those are exactly the ones where the
+// walker is moving across the line of sight. A model that added the shear
+// isotropically — the obvious simplification — would overstate a walk-past by
+// something like a tenth, and would get the in-line case wrong in the other
+// direction.
+func TestShearNullsAbeamAndContributesInLine(t *testing.T) {
+	res := base(t)
+	const n = 4000
+
+	energy := func(sch source.Schedule) float64 {
+		out, err := Reference(res, sch, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var e float64
+		for _, v := range out {
+			e += v * v
+		}
+		return e
+	}
+	// One footfall, heading +x, at a fixed range but different bearings.
+	at := func(x, y float64, ap float64) source.Schedule {
+		st := res.Walker
+		st.APPeak = ap
+		return fixed{[]source.Contact{{
+			ID: "f", X: x, Y: y, Start: 0.05,
+			Profile: source.Footfall{Stance: st, Heading: 0},
+		}}}
+	}
+	const r = 8.0
+
+	// Abeam: the walker crosses the line of sight, so the shear should not
+	// change the energy at all.
+	abeamOff, abeamOn := energy(at(0, r, -1)), energy(at(0, r, 0.35))
+	if rel := math.Abs(abeamOn-abeamOff) / abeamOff; rel > 1e-6 {
+		t.Errorf("shear changed an abeam trace by %.3g; it should null there", rel)
+	}
+
+	// In line: the walker moves along the line of sight, so it should — but
+	// only slightly, and the smallness is the second half of the finding.
+	// The shear is a smooth half-cycle over the whole stance with no impact
+	// transient of its own, so its energy sits at a few hertz where both the
+	// propagation and the geophone are weak. The vertical force radiates
+	// through its heel strike; the shear has nothing equivalent. Even head-on
+	// it moves the trace by a fraction of a percent.
+	inlineOff, inlineOn := energy(at(-r, 0, -1)), energy(at(-r, 0, 0.35))
+	rel := math.Abs(inlineOn-inlineOff) / inlineOff
+	if rel < 1e-3 {
+		t.Errorf("shear changed an in-line trace by only %.3g; it should contribute something there", rel)
+	}
+	if rel > 0.05 {
+		t.Errorf("shear changed an in-line trace by %.3g; that is more than a smooth low-frequency source should manage", rel)
+	}
+}
+
+// Two stated limitations of the gait model, recorded as a test so that fixing
+// either shows up here as a deliberate change rather than passing unnoticed.
+//
+// Walking speed lengthens the stride but does not change the cadence, because
+// the gait cycle is derived from stance duration and stance duration is an
+// independent input. And the per-step force is the same at any speed. Real
+// walkers do neither: cadence rises with speed, stance shortens, and peak
+// ground reaction force climbs from about 1.1 body weights at a stroll to over
+// 1.3 at a brisk pace.
+//
+// This is why the sensitivity sweep finds walking speed almost irrelevant —
+// a result about the model, not about walking. Sweeping speed meaningfully
+// means co-varying stance duration and the peaks with it, and doing that
+// properly needs the force-plate relations WP4 can supply.
+func TestSpeedChangesStrideNotCadenceOrForce(t *testing.T) {
+	res := base(t)
+	a := source.Walk{Stance: res.Walker, Speed: 0.9, StartX: -6, StartY: 8, Until: 8}
+	b := source.Walk{Stance: res.Walker, Speed: 1.7, StartX: -6, StartY: 8, Until: 8}
+
+	if b.StrideOrDefault() <= a.StrideOrDefault() {
+		t.Errorf("faster walking did not lengthen the stride: %g then %g m",
+			a.StrideOrDefault(), b.StrideOrDefault())
+	}
+	if math.Abs(float64(a.StepPeriod()-b.StepPeriod())) > 1e-12 {
+		t.Errorf("cadence moved with speed: %g then %g s. If stance duration is now "+
+			"coupled to speed, that is an improvement — update this test to say so",
+			a.StepPeriod(), b.StepPeriod())
+	}
+	if a.Stance.PeakForce() != b.Stance.PeakForce() {
+		t.Errorf("per-step peak force differs with speed: %g vs %g. If the peaks are now "+
+			"coupled to speed, update this test", a.Stance.PeakForce(), b.Stance.PeakForce())
+	}
+}

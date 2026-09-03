@@ -56,6 +56,16 @@ type WalkerSpec struct {
 	FirstPeak       float64 `json:"first_peak_bw"`
 	SecondPeak      float64 `json:"second_peak_bw"`
 	MidstanceValley float64 `json:"midstance_valley_bw"`
+	// TransientPeak and TransientRise describe the heel strike: the height it
+	// reaches above the smooth curve, in body weights, and the time it takes
+	// to get there. Zero uses the defaults; a negative peak removes it.
+	//
+	// These are exposed because they are the least constrained part of the
+	// whole model and the part the radiated signal depends on most, which
+	// makes them the first axes any sensitivity analysis has to sweep.
+	TransientPeak float64 `json:"transient_peak_bw,omitempty"`
+	TransientRise float64 `json:"transient_rise_s,omitempty"`
+	APPeak        float64 `json:"ap_peak_bw,omitempty"`
 }
 
 type SensorSpec struct {
@@ -195,6 +205,9 @@ func (c Config) Resolve() (Resolved, error) {
 		FirstPeak:       c.Walker.FirstPeak,
 		SecondPeak:      c.Walker.SecondPeak,
 		MidstanceValley: c.Walker.MidstanceValley,
+		TransientPeak:   c.Walker.TransientPeak,
+		TransientRise:   units.Seconds(c.Walker.TransientRise),
+		APPeak:          c.Walker.APPeak,
 	}
 	if err := r.Walker.Validate(); err != nil {
 		return r, err
