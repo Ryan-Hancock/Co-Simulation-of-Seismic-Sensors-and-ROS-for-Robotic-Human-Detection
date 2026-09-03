@@ -463,15 +463,69 @@ and the 2×2 minor inherits that. It looked exactly like an extra root. They are
 now derived in closed form from the evanescent potentials, and vary
 continuously by construction.
 
+**f–k integration done** (`internal/fk`). Integrating over horizontal
+wavenumber rather than summing residues gives the whole field at once — near
+field, body waves, every mode, the static term — with no decision about which
+contributions to keep. Complex arithmetic throughout, because attenuation is
+what moves the Rayleigh pole off the real axis and makes the integral
+convergent: Q is not a refinement here, it is what makes the problem well posed.
+
+**The near-field result, loam at 10 Hz (λ = 18.9 m):**
+
+| r/λ | full f–k ÷ far-field |
+|---|---|
+| 0.05 | **3.09×** |
+| 0.11 | 2.21× |
+| 0.27 | 1.50× |
+| 0.53 | 1.23× |
+| 1.06 | 0.93× |
+| beyond | agree on average, ±20% scatter |
+
+The far-field model is low by up to **a factor of three** inside a tenth of a
+wavelength and still 20% low at half of one. The direction matters as much as
+the size: the omitted terms *add*, so a detector tuned on far-field predictions
+is conservative at close range, while WP3's localisation and amplitude
+inversion would be biased. The residual scatter beyond one wavelength is body
+waves interfering with the Rayleigh arrival — something a Rayleigh-only model
+cannot produce at all.
+
+**V2 served, by a better route than Lamb's problem.** As k grows the response
+tends to C/k, and C is the medium's static near-field coefficient — for a
+half-space exactly Boussinesq's (1−ν)/(2πμ). That single number pins the source
+normalisation, the Hankel convention, the motion-stress scaling and the
+traction boundary condition *simultaneously*; every stray factor of 2π shows up
+in it. It is right to six figures in the lossless limit, and the integrated
+displacement reproduces Boussinesq at range to under 1%. **Absolute amplitude
+is now pinned**, which slice 0 could not do.
+
+**Finding: an apparent 4/3 normalisation error was not one.** Isolating the
+large-k asymptote *from* the quadrature showed the response exactly right with
+attenuation off; the excess was Kjartansson dispersion at 0.05 Hz (three
+decades below the reference frequency) compounded with a badly truncated
+oscillatory tail. Testing the asymptote separately from the integral is what
+separated them — a good argument for testing the pieces of a quadrature apart
+from the quadrature.
+
+**Finding: the static tail must be subtracted, not integrated.** The integrand
+tends to C·J₀(kr), whose integral converges only as √(truncation) — cutting at
+kr = 40 still leaves 13% error. Subtracting the asymptote and adding back its
+exact integral C/r converges in a few thousand samples and makes the static
+limit exact by construction.
+
 **Remaining in this slice:**
 
-1. **Layered eigenfunctions and mode-sum excitation** — the Green's function
-   for a layered medium, replacing slice 0's homogeneous one.
-2. **Full f–k integration** — §2.3's near-field argument. This is the part that
-   makes the model valid at 1–10 m rather than only at 20 m+.
-3. **V2, Lamb's problem** — moved here from slice 0; still the only check on
-   absolute amplitude.
-4. **V9 for layered media** — causality with the layered Green's function.
+1. **Wire the layered/near-field Green's function into the synthesis path** —
+   `internal/fk` computes the response but nothing consumes it yet; `green`
+   still serves `sensing`. This is where slice 5's bank belongs, since f–k is
+   far too slow for the runtime path.
+2. **V9 for layered media** — causality with the layered Green's function.
+3. **Layered eigenfunctions** — now optional. f–k subsumes the mode sum, so
+   these are only needed if WP3 wants group arrival times per mode.
+
+**Recorded limitation:** far into the evanescent regime the P and SV vertical
+wavenumbers both approach k, the two eigenvectors nearly coincide, and the
+basis becomes ill-conditioned — weathered rock at k = 200 loses about four
+digits. Inherent to an eigenvector formulation.
 
 **Noted:** group velocity is computed by finite difference on the phase curve,
 which goes noisy near mode osculations where dc/df is steep. Adequate for
