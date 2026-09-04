@@ -5,3 +5,4 @@
 disba==0.7.0
 numpy==2.5.2
 matplotlib==3.10.7
+scipy==1.18.1
