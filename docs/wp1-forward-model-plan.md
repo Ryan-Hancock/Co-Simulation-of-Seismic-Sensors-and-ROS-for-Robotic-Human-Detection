@@ -756,9 +756,10 @@ shear over a factor of twenty moved a walk-past by under a percent.
 | **Ships** | O1 acceptance, and the priors for O4's domain-randomisation ranges. |
 | **Exit** | V1–V12 green in CI; report regenerable from one command. |
 
-**In progress.** The quadrature defect slice 4 recorded is fixed, the hierarchy
-table is built (`internal/hier`, `geohier`), and fixing the first uncovered a
-second and larger defect. Remaining: the Sobol sweep and the report.
+**Status: the analysis, the table and the report are done.** The quadrature
+defect slice 4 recorded is fixed; fixing it uncovered a second and larger one in
+the analytic model. What remains of the slice is what remains of V6 and V9, both
+listed at the end.
 
 #### The hierarchy table
 
@@ -835,13 +836,96 @@ bound was evidence of a defect, not of quality.** The bound is now 2e-4 against
 a measured 6e-5, which is the price of an asymptotic approximation not being
 exactly causal.
 
+#### The Sobol decomposition
+
+N = 512 over ten axes, 6 144 runs in 15m41s, none rejected. Total-effect indices
+(the first-order ones are noisy at this sample size; **act on ST**):
+
+| axis | log peak | log rms | centroid | SNR |
+|---|---|---|---|---|
+| shear_velocity | **0.427** | **0.593** | 0.082 | **0.593** |
+| coupling_resonance | 0.020 | 0.003 | **0.507** | 0.003 |
+| soil_q | 0.039 | 0.017 | **0.219** | 0.017 |
+| range | 0.204 | 0.144 | 0.173 | 0.144 |
+| transient_peak | 0.188 | 0.097 | 0.071 | 0.097 |
+| transient_rise | 0.104 | 0.053 | 0.045 | 0.053 |
+| body_mass | 0.050 | 0.065 | **0.000** | 0.065 |
+| stance_duration | 0.012 | 0.045 | 0.013 | 0.045 |
+| walk_speed | 0.000 | 0.000 | 0.008 | 0.000 |
+| ap_peak | 0.000 | 0.000 | 0.000 | 0.000 |
+| **sum** | 1.043 | 1.017 | 1.118 | 1.017 |
+
+**Amplitude and spectrum are driven by different parameters, and barely overlap.**
+What makes a footstep loud is the medium's shear velocity, at four to six times
+the weight of anything else. What makes it *sound* the way it does is the
+sensor's ground coupling, at half the variance on its own, with soil Q second
+and shear velocity almost irrelevant. A detector keyed on amplitude and one
+keyed on spectral shape therefore have almost disjoint sensitivities — which is
+a design constraint for WP3 and was not visible in the one-at-a-time sweep,
+because a gradient at one point cannot say how variance is apportioned across a
+space.
+
+**The coupling resonance dominating the spectrum is the actionable result.** It
+is the parameter O3 says a robot has least control over — a geophone bedded on
+rock and one pushed into soft ground differ by more than the soils do. Coupling
+was previously treated as a correction; over the credible range it is the
+largest single influence on spectral shape.
+
+**The decomposition recovers a structural zero exactly.** Body mass has index
+`0.000 [0.000, 0.000]` on the spectral centroid — both bounds zero, not merely
+small. It must: the model is linear and mass is a pure scale on the force, so it
+cannot move a normalised spectral statistic. Getting an exact zero out of a
+Monte Carlo estimator on the real model is the same check Ishigami's x3 provides
+on a synthetic one, and it is worth more, because it exercises the whole
+pipeline — the design, the Go evaluation, the matching of results to rows.
+
+**The model is nearly additive.** Total effects exceed one by 2% to 12%, so
+interactions carry very little of the variance. Convenient, and worth stating:
+it means the one-at-a-time sweep was not as misleading as it could have been,
+and that O4 can randomise these axes independently without much loss.
+
+**walk_speed's index of zero is a defect in this model, not a fact about the
+world, and must not be read as a randomisation decision.** A real walker's speed
+changes cadence, stance duration and peak GRF together; here it changes only the
+stride geometry, which is the gap slice 2 already recorded as the first thing to
+fix in the source model. The decomposition is measuring the model faithfully and
+the model is wrong on this axis. `ap_peak`'s zero is different — that one is
+real, and confirms slice 2's independent finding that varying the fore-aft shear
+over a factor of twenty moves a walk-past by under a percent.
+
+**Priors for O4's domain randomisation**, which is what the analysis was for:
+randomise shear velocity hardest of all, and the coupling resonance whenever
+spectral features are used; then range, transient peak, soil Q and body mass;
+`ap_peak` can be held fixed. Walk speed stays on the list despite its index,
+pending the source-model fix.
+
+**Two decisions the estimator forced.** Amplitudes are decomposed in the log,
+because peak and rms span three orders of magnitude over these ranges and the
+raw variance is otherwise dominated by a handful of loud runs — at N=64 the
+untransformed peak gave first-order indices above one and totals summing to 3.7.
+And the estimator is checked against Ishigami's closed form before being
+believed here: largest absolute error 0.0004, including a variable with no
+first-order effect at all and a quarter of the variance through an interaction.
+
+#### The validation report
+
+`make report` runs the tests each validation names and writes
+[validation-report.md](validation-report.md) from what they logged, so its
+figures are what the suite measured on the run that produced it. V1–V5, V7, V8,
+V10–V12 are green. **V6 and V9 are partial and reported as partial**: V6's
+format and cross-language conformance are done but no external solver has been
+compared, and V9 covers only the homogeneous model. A renamed test is reported
+as MISSING rather than skipped, because a validation that has quietly stopped
+running is worse than one that fails.
+
 #### What is not yet done
 
-The Sobol sweep over soil, subject and coupling, and the validation report
-regenerable from one command. Both now sit on a corrected forward model, which
-is the right order: a sensitivity analysis of a model with a ninety-degree phase
-error would have produced defensible-looking priors for O4 built on a waveform
-shape that does not occur.
+- **V6 proper** — the L3 import path from Devito or SPECFEM3D. `py/bankfmt` can
+  already write the format, so this is a driver, not a format question.
+- **V9 for layered media** — causality of the layered impulse response. V5's
+  waveform agreement bears on it but does not establish it.
+- **The source model's speed coupling**, which the Sobol result now makes
+  concrete: an axis O4 would otherwise be told to ignore.
 
 ### What each slice buys
 
@@ -948,9 +1032,11 @@ says the layered path is right by independent numerical route. Everything else
 is a guard rail.
 
 **Sensitivity analysis** (explicitly required by the README for the GRF, and
-worth extending to soil): one-at-a-time and Sobol-style sweeps over body mass,
-gait speed, transient rise time, `Vs`, `Q`, layer depth, coupling stiffness →
-report effect on peak amplitude, spectral centroid, and SNR-vs-range slope.
+worth extending to soil): **done in slice 6.** One-at-a-time in `geosweep`, and
+a Sobol decomposition over the joint space in `py/analysis/sobol.py`, reported
+against peak amplitude, rms, spectral centroid and SNR. The headline is that
+amplitude and spectrum are driven by almost disjoint sets of parameters — shear
+velocity for one, the sensor's ground coupling for the other.
 This output doubles as the prior for O4's domain-randomisation ranges.
 
 ---
