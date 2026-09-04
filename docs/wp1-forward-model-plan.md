@@ -423,7 +423,10 @@ dominant error is not amplitude, which goes as 1/√r and barely moves, but
 This is the slice that earns "physically grounded" in O1. It is also the one
 most likely to overrun — see the root-finding and near-field risks in §7.
 
-**Status: dispersion done; excitation and f–k integration outstanding.**
+**Status: done.** Dispersion, excitation and f–k integration are all in;
+V2, V3, V4 and V9 are green. The one live caveat is the
+frequency-thickness limit recorded under slice 6, which bounds how high a
+layered bank may be built.
 
 Done: `internal/layer` (layered medium), `internal/propmat` (Dunkin minor
 propagator, secular function), `internal/disp` (bracketed root finding, mode
@@ -514,12 +517,11 @@ limit exact by construction.
 
 **Remaining in this slice:**
 
-1. **Wire the layered/near-field Green's function into the synthesis path** —
-   `internal/fk` computes the response but nothing consumes it yet; `green`
-   still serves `sensing`. This is where slice 5's bank belongs, since f–k is
-   far too slow for the runtime path.
-2. **V9 for layered media** — causality with the layered Green's function.
-3. **Layered eigenfunctions** — now optional. f–k subsumes the mode sum, so
+1. ~~Wire the layered Green's function into the synthesis path~~ — **done in
+   slice 5**, through the bank; `sensing.Propagation` takes either model.
+2. ~~V9 for layered media~~ — **done in slice 6**. The layered impulse response
+   turned out to be the wrong instrument for it; see there.
+3. **Layered eigenfunctions** — still optional. f–k subsumes the mode sum, so
    these are only needed if WP3 wants group arrival times per mode.
 
 **Recorded limitation:** far into the evanescent regime the P and SV vertical
@@ -661,7 +663,8 @@ to learn it here than three work packages later.
 
 **Status: format, interpolation, conformance and integration done.** Remaining
 is the L3 (Devito/SPECFEM3D) import path — `py/bankfmt` can already write the
-format, so what is left is a driver, not a format question.
+format, so what is left is a driver, not a format question. That driver is what
+V6 still wants.
 
 **Interpolated lookup costs 32 ns with no allocation**, against milliseconds to
 compute the same response from the wavenumber integral — four orders of
