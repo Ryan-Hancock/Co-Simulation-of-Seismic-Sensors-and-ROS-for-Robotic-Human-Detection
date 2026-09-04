@@ -238,7 +238,7 @@ func TestRangeQuantisationErrorIsBounded(t *testing.T) {
 	// on where the sampling grid happens to fall relative to it, so a shift of
 	// a tenth of a sample moves it by more than the physics does — that is an
 	// artefact of measuring, not of the model.
-	at := func(y float64) (rms float64, peakAt int) {
+	at := func(y float64) (rms float64, trace []float64) {
 		sch := fixed{[]source.Contact{{
 			ID: "f", X: 0, Y: y, Start: 0.05,
 			Profile: source.Footfall{Stance: res.Walker, Heading: 0},
@@ -247,14 +247,11 @@ func TestRangeQuantisationErrorIsBounded(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var sum, peak float64
-		for i, v := range out {
+		var sum float64
+		for _, v := range out {
 			sum += v * v
-			if math.Abs(v) > peak {
-				peak, peakAt = math.Abs(v), i
-			}
 		}
-		return math.Sqrt(sum / float64(len(out))), peakAt
+		return math.Sqrt(sum / float64(len(out))), out
 	}
 
 	// Two ranges a full quantum apart are the worst case: they are the closest
@@ -274,8 +271,13 @@ func TestRangeQuantisationErrorIsBounded(t *testing.T) {
 	if trueShift > 1 {
 		t.Errorf("one quantum is %.2f samples of delay at %g Hz; too coarse to place an arrival", trueShift, fs)
 	}
-	if shift := abs(t1 - t0); float64(shift) > 1+trueShift {
-		t.Errorf("peak moved %d samples across one quantum, want at most %.2f", shift, 1+trueShift)
+	// Measured by cross-correlation rather than by where the largest sample
+	// landed. The comment above applies to timing as much as to amplitude: the
+	// peak of a waveform with a long tail is not a well-determined instant, and
+	// picking it moves by several samples for reasons that have nothing to do
+	// with range. Correlating the whole waveform uses all of it.
+	if shift := abs(crossLag(t0, t1)); float64(shift) > 1+trueShift {
+		t.Errorf("the arrival moved %d samples across one quantum, want at most %.2f", shift, 1+trueShift)
 	}
 
 	// And in metres of localisation error, which is the number that matters.
@@ -496,4 +498,19 @@ func TestSpeedChangesStrideNotCadenceOrForce(t *testing.T) {
 		t.Errorf("per-step peak force differs with speed: %g vs %g. If the peaks are now "+
 			"coupled to speed, update this test", a.Stance.PeakForce(), b.Stance.PeakForce())
 	}
+}
+
+// crossLag is the sample shift at which b best matches a.
+func crossLag(a, b []float64) int {
+	best, at := math.Inf(-1), 0
+	for k := range len(a) / 2 {
+		var acc float64
+		for i := k; i < len(a); i++ {
+			acc += b[i] * a[i-k]
+		}
+		if acc > best {
+			best, at = acc, k
+		}
+	}
+	return at
 }

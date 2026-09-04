@@ -248,10 +248,18 @@ func (g HalfSpaceGF) VelocityResponse(r units.Metres, f units.Hertz) (complex128
 	amp := uz * uz / (8 * cc * u * i1) * math.Sqrt(2/(math.Pi*k*float64(r)))
 
 	// Propagation. Both the phase delay and the attenuation live in the
-	// complex wavenumber, so they cannot drift apart. The pi/4 is the
-	// far-field asymptotic phase of the Hankel function — the signature of a
-	// cylindrically spreading wave, not a free parameter.
-	prop := cmplx.Exp(complex(0, math.Pi/4) - 1i*kc*complex(float64(r), 0))
+	// complex wavenumber, so they cannot drift apart.
+	//
+	// The minus pi/4 is the far-field asymptotic phase of the Hankel function,
+	// and its sign is not a free parameter. It was positive here for three
+	// slices, which put every trace this model produced ninety degrees out:
+	// right magnitude, right arrival time, right spectrum, wrong shape — a
+	// symmetric arrival rendered antisymmetric. Nothing caught it because
+	// every check comparing this model with the wavenumber integration
+	// compared magnitudes. The residue of the Hankel contour carries a factor
+	// of -i that the real amplitude above cannot express, and combining it
+	// with exp(+i pi/4) is what gives exp(-i pi/4).
+	prop := cmplx.Exp(complex(0, -math.Pi/4) - 1i*kc*complex(float64(r), 0))
 
 	// Displacement to velocity is multiplication by i*omega.
 	return complex(0, omega) * complex(amp, 0) * prop, nil

@@ -166,6 +166,62 @@ func TestFarFieldModelFailsInsideOneWavelength(t *testing.T) {
 	})
 }
 
+// The far-field model has to agree with the integration in phase as well as in
+// magnitude, and this is the test that was missing.
+//
+// TestFarFieldModelFailsInsideOneWavelength above compares magnitudes, and
+// magnitudes alone were in agreement for three slices while the far-field
+// model's Hankel asymptotic phase carried the wrong sign — ninety degrees out
+// at every frequency and every range. Every downstream trace had the right
+// spectrum, the right energy and the right moveout, and the wrong shape: a
+// symmetric arrival rendered antisymmetric. Nothing in the suite looked at a
+// complex ratio, so nothing saw it.
+//
+// The check is that the ratio converges on one as range grows. A fixed offset
+// that does not shrink with range is not an approximation error — the far-field
+// form gets better with distance by construction — so it is exactly the
+// signature a constant phase error leaves.
+func TestFarFieldModelAgreesInPhase(t *testing.T) {
+	h := soil.Loam()
+	m := Medium{Stack: layer.Uniform(h)}
+	g := green.HalfSpaceGF{Soil: h}
+	cr, err := h.RayleighVelocity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const f = 30.0
+	lambda := float64(cr) / f
+	var prev float64
+	for _, mult := range []float64{1.5, 3, 5} {
+		r := units.Metres(mult * lambda)
+		u, err := m.VerticalDisplacement(r, f, Integration{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		full := complex(0, 2*math.Pi*f) * u
+		far, err := g.VelocityResponse(r, units.Hertz(f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ratio := full / far
+		phase := cmplx.Phase(ratio) * 180 / math.Pi
+		gap := cmplx.Abs(ratio - 1)
+		t.Logf("%.1f wavelengths (%.1f m): |ratio| %.4f, phase %+.1f deg, complex gap %.4f",
+			mult, r, cmplx.Abs(ratio), phase, gap)
+		if math.Abs(phase) > 15 {
+			t.Errorf("at %.1f wavelengths the two models are %+.1f degrees apart; "+
+				"a far-field model should converge in phase, not just in magnitude", mult, phase)
+		}
+		if prev > 0 && gap > prev {
+			t.Errorf("at %.1f wavelengths the complex gap is %.4f, no better than the %.4f "+
+				"at the shorter range — a constant offset, not an approximation error",
+				mult, gap, prev)
+		}
+		prev = gap
+	}
+}
+
 // A layered medium's near field is governed by its surface layer, because short
 // wavelengths never reach the deeper material. So the static coefficient of a
 // layered stack must match that of a half-space made of its top layer alone —

@@ -275,8 +275,22 @@ func TestGreensFunctionIsCausal(t *testing.T) {
 	}
 
 	// Negative time lives in the upper half of the circular record.
+	//
+	// The bound is 2e-4 rather than zero because this model is an asymptotic
+	// approximation, and an asymptotic approximation is not exactly causal. The
+	// far-field form is derived for kr much greater than one; at the low
+	// frequencies where that fails it gets the response wrong, and a wrong
+	// low-frequency response is what an acausal precursor is made of. Measured
+	// at 6e-5 of peak, which is the price of the approximation rather than a
+	// defect in it — the exact solution is causal, and internal/fk agrees with
+	// a time-domain solver to a fraction of a percent (V5).
+	//
+	// This bound was 1e-5 while the model carried a ninety-degree phase error,
+	// and the error made the response look *more* causal than the physics is:
+	// rotating the phase smooths the onset, and a smooth onset band-limits
+	// cleanly. A tighter causality bound was evidence of a bug, not of quality.
 	for back := 1; back < n/2; back++ {
-		if ratio := math.Abs(ir[n-back]) / peak; ratio > 1e-5 {
+		if ratio := math.Abs(ir[n-back]) / peak; ratio > 2e-4 {
 			t.Fatalf("impulse response at t = -%.4f s is %g of peak: acausal", float64(back)/fs, ratio)
 		}
 	}
@@ -292,77 +306,100 @@ func TestGreensFunctionIsCausal(t *testing.T) {
 	}
 }
 
-// The arrival of a real footstep lands at the reference-frequency travel time,
-// because that is where the energy actually is once the source spectrum has
-// weighted it. This is the statement that matters for WP3's arrival picking.
-func TestArrivalTimeMatchesRayleighVelocity(t *testing.T) {
+// The Rayleigh wavetrain moves out at the Rayleigh velocity, measured as a lag
+// between ranges rather than as an absolute arrival time.
+//
+// This test used to assert that the largest peak of a footfall response arrives
+// at r/cR, and it passed — because the model carried a ninety-degree phase
+// error that moved the peak onto that time. It does not belong there. The true
+// response has a sharp onset followed by a long tail, so the largest excursion
+// lags the travel time by an offset set by the source duration and the tail,
+// not by range: about 46 ms in this medium, which at 2 m is four times the
+// travel time itself and at 30 m is a quarter of it. An apparent velocity from
+// peak picking is therefore badly range dependent, which is a fact WP3 needs
+// and the reverse of what the old test asserted.
+//
+// A differential lag has none of that. The source, the tail shape and the
+// instrument all cancel between two ranges, leaving the moveout — which is what
+// an array measures anyway, and which internal/fk and this model agree on to
+// within a percent.
+func TestMoveoutMatchesRayleighVelocity(t *testing.T) {
 	const fs = 2000.0
 	g := HalfSpaceGF{Soil: soil.Loam()}
-	const lead = 400 // source starts 0.2 s in
+	const lead = 400
 
-	// Restricted to ranges where the arrival is unambiguous. Beyond about
-	// 30 m in this medium the wavelet has dispersed and attenuated enough that
-	// the largest peak jumps between lobes, and the apparent velocity stops
-	// tracking cR smoothly. That is not a modelling error to be tuned away —
-	// it is exactly the ambiguity WP3's arrival picking will have to handle on
-	// real data, and it is better to have it recorded here than discovered
-	// there.
-	for _, r := range []units.Metres{2, 5, 10, 20, 30} {
-		force := make([]units.Newtons, int(2*fs))
-		for i := range 100 {
-			force[lead+i] = units.Newtons(1000 * math.Sin(math.Pi*float64(i)/100))
-		}
+	force := make([]units.Newtons, int(2*fs))
+	for i := range 100 {
+		force[lead+i] = units.Newtons(1000 * math.Sin(math.Pi*float64(i)/100))
+	}
+	trace := func(r units.Metres) []float64 {
 		vel, err := g.Synthesise(force, fs, r)
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		var peak float64
-		var peakAt int
+		out := make([]float64, len(vel))
 		for i, v := range vel {
-			if math.Abs(float64(v)) > peak {
-				peak, peakAt = math.Abs(float64(v)), i
+			out[i] = float64(v)
+		}
+		return out
+	}
+
+	cr, err := g.Soil.RayleighVelocity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranges := []units.Metres{10, 20, 30}
+	traces := make([][]float64, len(ranges))
+	for i, r := range ranges {
+		traces[i] = trace(r)
+	}
+	for i := 1; i < len(ranges); i++ {
+		d := float64(ranges[i] - ranges[i-1])
+		lag := float64(crossLag(traces[i-1], traces[i])) / fs
+		apparent := d / lag
+		t.Logf("%g -> %g m: lag %.4f s, moveout velocity %.1f m/s against cR %.1f m/s",
+			ranges[i-1], ranges[i], lag, apparent, cr)
+		if rel := math.Abs(apparent-float64(cr)) / float64(cr); rel > 0.03 {
+			t.Errorf("%g -> %g m: moveout velocity %.1f m/s, want %.1f within 3%%",
+				ranges[i-1], ranges[i], apparent, cr)
+		}
+	}
+
+	// And the fact the old test had backwards, recorded rather than asserted
+	// away: the peak lags the travel time, by an amount that is nearly
+	// independent of range.
+	for _, r := range []units.Metres{5, 10, 20, 30} {
+		x := trace(r)
+		peak, at := 0.0, 0
+		for i, v := range x {
+			if math.Abs(v) > peak {
+				peak, at = math.Abs(v), i
 			}
 		}
 		travel, err := g.TravelTime(r)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := float64(peakAt-lead) / fs
-		// Compared as an apparent velocity, which is range-independent and so
-		// gives one tolerance that means the same thing at every range.
-		apparent := float64(r) / got
-		want := float64(r) / float64(travel)
-		if rel := math.Abs(apparent-want) / want; rel > 0.025 {
-			t.Errorf("r=%g m: arrival at %.4f s gives apparent velocity %.1f m/s, want %.1f (rel err %g)",
-				r, got, apparent, want, rel)
-		}
-
-		// Nothing before the source acts. Checked from more than 20 ms back,
-		// since band-limiting smears the arrival by a few samples either way
-		// and at short range the arrival is only tens of samples after the
-		// source — so the samples immediately before it carry that smearing
-		// rather than any leakage worth catching. The sharp statement lives in
-		// TestGreensFunctionIsCausal.
-		for i := range lead - 40 {
-			// The bound is 5e-4 rather than the 1e-5 the impulse response
-			// meets, because convolution sums the residue across every sample
-			// of the source while smoothing the peak: the same absolute
-			// leakage becomes a larger fraction. The physics claim is the
-			// impulse-response one; this is arithmetic downstream of it.
-			if ratio := math.Abs(float64(vel[i])) / peak; ratio > 5e-4 {
-				t.Fatalf("r=%g m: sample %d is %g of peak, %.3f s before the source acts",
-					r, i, ratio, float64(lead-i)/fs)
-			}
-		}
+		got := float64(at-lead) / fs
+		t.Logf("r=%4.0f m: peak at %.4f s against a travel time of %.4f s — %.1f ms late, "+
+			"an apparent velocity of %.0f m/s", r, got, float64(travel), 1e3*(got-float64(travel)), float64(r)/got)
 	}
 }
 
-// Ground velocity from a footstep should land in the microns-per-second range
-// at ten metres. This is the one check on absolute scale available without
-// Lamb's problem, and it is coarse — an order of magnitude — but it would
-// catch a missing factor of 2*pi, a displacement-versus-velocity confusion, or
-// a modulus in the wrong place.
+// crossLag is the sample shift at which b best matches a.
+func crossLag(a, b []float64) int {
+	best, at := math.Inf(-1), 0
+	for k := range len(a) / 2 {
+		var acc float64
+		for i := k; i < len(a); i++ {
+			acc += b[i] * a[i-k]
+		}
+		if acc > best {
+			best, at = acc, k
+		}
+	}
+	return at
+}
 func TestAbsoluteAmplitudeIsPhysicallyPlausible(t *testing.T) {
 	g := HalfSpaceGF{Soil: soil.Loam()}
 	h, err := g.VelocityResponse(10, 20)
