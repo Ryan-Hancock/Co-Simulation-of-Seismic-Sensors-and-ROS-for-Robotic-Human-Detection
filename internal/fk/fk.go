@@ -373,9 +373,12 @@ func (m Medium) VerticalDisplacement(r units.Metres, freq float64, opt Integrati
 	n := opt.samples()
 	dk := kMax / float64(n)
 
-	// Trapezoidal on the remainder. At k -> 0 the integrand k*uTilde - C tends
-	// to -C, finite, so the lower endpoint is well behaved.
-	var sum complex128
+	// Trapezoidal on the remainder, both panels closed. At k -> 0 the
+	// integrand k*uTilde - C tends to -C, which is finite and emphatically not
+	// zero: leaving the first panel open drops half of it, and half a panel of
+	// a quantity that size is a first-order error large enough to dominate
+	// everything else the quadrature does. See TestQuadratureIsSecondOrder.
+	sum := complex(0.5*dk, 0) * (-c)
 	for i := 1; i <= n; i++ {
 		k := float64(i) * dk
 		u, err := m.SurfaceResponse(k, freq)
@@ -470,12 +473,14 @@ func (m Medium) VerticalDisplacementMulti(ranges []units.Metres, freq float64, o
 		return nil, err
 	}
 
+	// The k = 0 end of each panel sum, where the integrand is -C for every
+	// range because J0(0) is one.
+	dk := g.KMax / float64(g.Samples)
 	out := make([]complex128, len(ranges))
 	for i, r := range ranges {
-		out[i] = c / complex(float64(r), 0)
+		out[i] = c/complex(float64(r), 0) - complex(0.5*dk, 0)*c
 	}
 
-	dk := g.KMax / float64(g.Samples)
 	for i := 1; i <= g.Samples; i++ {
 		k := float64(i) * dk
 		u, err := m.SurfaceResponse(k, freq)

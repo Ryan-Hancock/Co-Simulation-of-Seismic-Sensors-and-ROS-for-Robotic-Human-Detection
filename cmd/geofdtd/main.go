@@ -7,13 +7,11 @@
 // test suite: one command, a CSV of both traces at each range, and a printed
 // table of how far apart they are.
 //
-// Two settings decide whether the answer means anything. The grid spacing has
-// to resolve the shortest wavelength in the band — -ppw sets how finely, and
-// the scheme is first-order accurate at the free surface, so the error falls
-// only linearly with it. And -ref-samples has to be large enough that the
-// reference itself is converged: the wavenumber integrand has a near-pole at
-// the Rayleigh wavenumber, the trapezoidal rule is first-order accurate there,
-// and the default sampling leaves about two percent at the top of the band.
+// The setting that decides whether the answer means anything is the grid
+// spacing, which has to resolve the shortest wavelength in the band. -ppw sets
+// how finely; the scheme is first-order accurate at the free surface, so the
+// error falls only linearly with it, and a single run is not the answer —
+// extrapolating two runs to zero spacing is what V5 asserts.
 package main
 
 import (
@@ -58,7 +56,7 @@ func run() error {
 		depth      = flag.Float64("depth", 0, "domain depth in metres (default 1.2x the furthest range)")
 		margin     = flag.Float64("margin", 1.5, "domain radius as a multiple of the furthest range")
 		compare    = flag.Bool("compare", false, "also synthesise through the frequency-wavenumber path")
-		refSamples = flag.Int("ref-samples", 160000, "wavenumber samples for the reference")
+		refSamples = flag.Int("ref-samples", 0, "wavenumber samples for the reference; 0 lets the solver choose")
 	)
 	flag.Parse()
 	if *modelPath == "" {

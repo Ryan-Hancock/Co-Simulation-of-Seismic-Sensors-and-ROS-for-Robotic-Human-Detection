@@ -35,12 +35,17 @@ const (
 	v5Band    = 90.0 // where the wavelet's spectrum is negligible
 	v5RefFreq = 30.0
 	v5Q       = 25.0
-	// The reference needs many more wavenumbers than the default. The
-	// integrand has a near-pole at the Rayleigh wavenumber, where a
-	// trapezoidal rule is only first-order accurate, and the default sampling
-	// leaves about two percent at the top of the band — which is the size of
-	// the disagreement being measured.
-	v5RefSamples = 160000
+	// Zero leaves the wavenumber sampling to GridFor.
+	//
+	// It did not always. This comparison first plateaued at three percent rms
+	// and stayed there under grid refinement, which reads like a wrong answer
+	// in the grid and was in fact an under-converged reference: the quadrature
+	// was leaving its panel at k = 0 open and carrying a two percent error that
+	// fell only linearly. Twenty times the sampling papered over it. The panel
+	// is closed now, the rule is second order, and the default sampling is
+	// accurate to three thousandths of a percent — so the reference is once
+	// again the cheap side of this comparison.
+	v5RefSamples = 0
 )
 
 // synthesise drives the frequency-wavenumber path with exactly the wavelet the

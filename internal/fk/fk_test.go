@@ -197,24 +197,96 @@ func TestStaticCoefficientFollowsTheSurfaceLayer(t *testing.T) {
 }
 
 // The quadrature has to be converged enough that the physics above is not
-// measuring the integration. Trapezoidal on an oscillatory integrand converges
-// slowly, so this records the rate rather than assuming it is fine.
-func TestQuadratureConverges(t *testing.T) {
+// measuring the integration, and the way to know that is the observed order —
+// not a tolerance, which can be met by an accident of where the error happens
+// to sit at one sample count.
+//
+// This test replaced one that asserted a two percent agreement and passed while
+// the rule was carrying a two percent error. Slice 4 found it by comparing
+// against a completely separate solver, which is a long way to travel for
+// something an order check catches for free.
+//
+// The rule is second order, so halving the spacing must quarter the error. The
+// failure this guards against is losing the closed panel at k = 0, where the
+// integrand is -C rather than zero: dropping half of that panel is an error
+// linear in the spacing, so it does not merely make the answer worse, it
+// changes the convergence order and swamps everything else.
+func TestQuadratureIsSecondOrder(t *testing.T) {
 	m := Medium{Stack: layer.Uniform(soil.Loam())}
-	ref, err := m.VerticalDisplacement(10, 20, Integration{Samples: 40000})
+	const r, f = units.Metres(16), 60.0
+	g, err := m.GridFor([]units.Metres{r}, f, Integration{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, n := range []int{5000, 10000, 20000} {
-		got, err := m.VerticalDisplacement(10, 20, Integration{Samples: n})
+	// Richardson on the two finest, which for a second-order rule removes the
+	// leading term and leaves a limit far more accurate than either.
+	fine, err := m.VerticalDisplacement(r, f, Integration{Samples: 16 * g.Samples})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finer, err := m.VerticalDisplacement(r, f, Integration{Samples: 32 * g.Samples})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := (4*finer - fine) / 3
+
+	var prev float64
+	for i, n := range []int{g.Samples, 2 * g.Samples, 4 * g.Samples} {
+		got, err := m.VerticalDisplacement(r, f, Integration{Samples: n})
 		if err != nil {
 			t.Fatal(err)
 		}
 		rel := cmplx.Abs(got-ref) / cmplx.Abs(ref)
-		if n >= 10000 && rel > 0.02 {
-			t.Errorf("n=%d differs from n=40000 by %.4f; expected under 2%%", n, rel)
+		if i > 0 {
+			order := math.Log2(prev / rel)
+			t.Logf("n=%7d: relative error %.3e, order %.2f", n, rel, order)
+			if order < 1.5 {
+				t.Errorf("n=%d: convergence order %.2f, want second order — "+
+					"a first-order rule here means the panel at k=0 is open again", n, order)
+			}
+		} else {
+			t.Logf("n=%7d: relative error %.3e", n, rel)
+			if rel > 1e-3 {
+				t.Errorf("the default sampling is %.4f%% off; it should be well under a tenth of a percent",
+					100*rel)
+			}
 		}
-		t.Logf("n=%6d: relative difference from n=40000 is %.5f", n, rel)
+		prev = rel
+	}
+}
+
+// The integrand at zero wavenumber is minus the static coefficient, and the
+// quadrature's first panel is written on that basis rather than evaluated,
+// because SurfaceResponse cannot be called at k = 0.
+func TestIntegrandAtZeroWavenumber(t *testing.T) {
+	m := Medium{Stack: layer.Uniform(soil.Loam())}
+	const f = 40.0
+	slowest, _ := m.Stack.VelocityBounds()
+	kBody := 2 * math.Pi * f / float64(slowest)
+	c, err := m.StaticCoefficient(f, 200*kBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approach is linear in k, so the gap shrinks by ten for every decade
+	// and the slope is what says the limit is -C exactly rather than -C plus
+	// something small. An assertion on the gap alone could not tell those
+	// apart, which is the whole question here.
+	var prev float64
+	for i, k := range []float64{1e-2, 1e-3, 1e-4, 1e-5} {
+		u, err := m.SurfaceResponse(k, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := complex(k, 0)*u - c
+		rel := cmplx.Abs(g+c) / cmplx.Abs(c)
+		t.Logf("k=%.0e: integrand %.6e, -C %.6e, apart by %.2e", k, cmplx.Abs(g), cmplx.Abs(c), rel)
+		if i > 0 {
+			if shrink := prev / rel; shrink < 9 || shrink > 11 {
+				t.Errorf("k=%g: the gap from -C shrank by %.2f per decade, want ten — "+
+					"the limit is not -C", k, shrink)
+			}
+		}
+		prev = rel
 	}
 }
 
