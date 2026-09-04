@@ -838,22 +838,22 @@ exactly causal.
 
 #### The Sobol decomposition
 
-N = 512 over ten axes, 6 144 runs in 15m41s, none rejected. Total-effect indices
-(the first-order ones are noisy at this sample size; **act on ST**):
+Run twice: first over ten axes, then again over eight after the gait coupling
+below removed two that were redundant with walking speed. The second run,
+N = 512, 5 120 runs, none rejected — total-effect indices, since the
+first-order ones are noisy at this sample size:
 
 | axis | log peak | log rms | centroid | SNR |
 |---|---|---|---|---|
-| shear_velocity | **0.427** | **0.593** | 0.082 | **0.593** |
-| coupling_resonance | 0.020 | 0.003 | **0.507** | 0.003 |
-| soil_q | 0.039 | 0.017 | **0.219** | 0.017 |
-| range | 0.204 | 0.144 | 0.173 | 0.144 |
-| transient_peak | 0.188 | 0.097 | 0.071 | 0.097 |
-| transient_rise | 0.104 | 0.053 | 0.045 | 0.053 |
-| body_mass | 0.050 | 0.065 | **0.000** | 0.065 |
-| stance_duration | 0.012 | 0.045 | 0.013 | 0.045 |
-| walk_speed | 0.000 | 0.000 | 0.008 | 0.000 |
-| ap_peak | 0.000 | 0.000 | 0.000 | 0.000 |
-| **sum** | 1.043 | 1.017 | 1.118 | 1.017 |
+| shear_velocity | **0.382** | **0.542** | 0.095 | **0.542** |
+| coupling_resonance | 0.027 | 0.005 | **0.539** | 0.005 |
+| soil_q | 0.050 | 0.020 | **0.226** | 0.020 |
+| range | 0.221 | 0.158 | 0.178 | 0.158 |
+| transient_scale | 0.170 | 0.115 | 0.014 | 0.115 |
+| transient_rise | 0.125 | 0.076 | 0.026 | 0.076 |
+| body_mass | 0.048 | 0.060 | **0.000** | 0.060 |
+| walk_speed | 0.022 | 0.068 | 0.009 | 0.068 |
+| **sum** | 1.045 | 1.045 | 1.087 | 1.045 |
 
 **Amplitude and spectrum are driven by different parameters, and barely overlap.**
 What makes a footstep loud is the medium's shear velocity, at four to six times
@@ -884,20 +884,18 @@ interactions carry very little of the variance. Convenient, and worth stating:
 it means the one-at-a-time sweep was not as misleading as it could have been,
 and that O4 can randomise these axes independently without much loss.
 
-**walk_speed's index of zero is a defect in this model, not a fact about the
-world, and must not be read as a randomisation decision.** A real walker's speed
-changes cadence, stance duration and peak GRF together; here it changes only the
-stride geometry, which is the gap slice 2 already recorded as the first thing to
-fix in the source model. The decomposition is measuring the model faithfully and
-the model is wrong on this axis. `ap_peak`'s zero is different — that one is
-real, and confirms slice 2's independent finding that varying the fore-aft shear
-over a factor of twenty moves a walk-past by under a percent.
+**walk_speed scored exactly zero on the first run, and that was a defect in the
+model rather than a fact about the world.** It is fixed — see below — and speed
+now carries 0.02 to 0.07, comparable to body mass. That number is conditional on
+the transient-versus-speed slope, which is the weakest assumption in the source
+model. `ap_peak`'s zero was different: real, and confirming slice 2's independent
+finding that varying the fore-aft shear over a factor of twenty moves a walk-past
+by under a percent. It is no longer an axis, being a function of speed.
 
 **Priors for O4's domain randomisation**, which is what the analysis was for:
 randomise shear velocity hardest of all, and the coupling resonance whenever
-spectral features are used; then range, transient peak, soil Q and body mass;
-`ap_peak` can be held fixed. Walk speed stays on the list despite its index,
-pending the source-model fix.
+spectral features are used; then range, the transient's scale and rise, soil Q,
+body mass and walking speed. The fore-aft shear can be held fixed.
 
 **Two decisions the estimator forced.** Amplitudes are decomposed in the log,
 because peak and rms span three orders of magnitude over these ranges and the
@@ -969,13 +967,63 @@ it honestly. Its replacement goes through the resolver rather than building a
 because it went round the resolver and exercised a fallback path the model no
 longer takes.
 
+#### The f–k solver's frequency-thickness limit
+
+Chasing V9 for layered media turned up a serious defect in the production path.
+**`internal/fk` loses precision with k times layer thickness, and did so
+silently.** At 400 Hz over a 2 m layer it returned a number **132% wrong** with
+no indication; `geobank`'s default band limit is 300 Hz, where the error is
+7×10⁻⁵ and climbing steeply.
+
+The cause is that this package propagates the four-component motion-stress
+vector directly — the formulation Dunkin's compound matrices exist to replace.
+`internal/propmat` *does* use them, and **V4 tests exactly this property there**;
+but they are separate code paths and only one was protected, so V4 said nothing
+about the other. A validation that covers one of two implementations of the same
+idea is worth less than it looks.
+
+The measurement isolates arithmetic from physics completely: **a stack of
+identical layers over a half-space of the same material is that half-space**, so
+any difference is precision and no reference solution is needed. Error is
+5×10⁻⁶ at k·h = 16, 10⁻³ at 20, and of order one by 24 — the same curve at 1 m,
+2 m and 4 m, so the product governs. The solve now refuses past `MaxLayerPhase`
+rather than answering. **The real fix is a compound-matrix reformulation of the
+f–k solve, which is slice 3 work and is not done.**
+
+#### V9 for layered media
+
+Green, and it took three attempts to ask the question properly.
+
+**A band-limited causal system is not causal**, and unlike the homogeneous model
+a layered stack never rolls its own impulse response off. Measured at 20 m, the
+response reaches a minimum near 200 Hz and then *rises* — higher modes, which
+sample the stiff half-space and are far less attenuated than the fundamental —
+and it is still a sixth of its peak at 300 Hz with Q as low as 5. **There is no
+sample rate at which this medium band-limits its own impulse response.**
+
+Two hypotheses were eliminated first, and the eliminations are most of the
+value. Sixty-fourfold wavenumber refinement moved the response by under a part
+in a thousand, ruling out the quadrature. Quadrupling the transform window
+changed the reported precursor *not at all* — which is the signature of a
+band-limit artefact rather than a wraparound one, since lengthening a record at
+a fixed sample rate does not move the band edge. Both are cheap tests that
+distinguish three otherwise identical-looking failures.
+
+So the *source* supplies the band limit instead, which is also how the model is
+used. A 20 Hz Ricker has nothing left at 120 Hz and there is no edge to ring.
+The precursor is **2×10⁻⁷ of peak at 10 m and 2×10⁻⁶ at 20 m**.
+
 #### What is not yet done
 
 - **V6 proper** — the L3 import path from Devito or SPECFEM3D. `py/bankfmt` can
   already write the format, so this is a driver, not a format question.
+- **A compound-matrix f–k solve**, to lift the frequency-thickness limit above.
+  Until then a layered bank must be band-limited to what `MaxLayerPhase` allows
+  for its thinnest layer, and `geobank`'s defaults are not automatically safe.
 - **Inter-subject gait variation at a fixed speed** — two people walking at
-  1.3 m/s here have identical gaits, which they do not in life. A WP4 item, when
-  there is force-plate data to characterise the spread with.
+  1.3 m/s here have identical gaits, which they do not in life. A WP4 item.
+- **The transient-versus-speed slope**, which is the weakest assumption in the
+  source model and on which walking speed's Sobol index depends.
 
 ### What each slice buys
 
