@@ -756,6 +756,93 @@ shear over a factor of twenty moved a walk-past by under a percent.
 | **Ships** | O1 acceptance, and the priors for O4's domain-randomisation ranges. |
 | **Exit** | V1–V12 green in CI; report regenerable from one command. |
 
+**In progress.** The quadrature defect slice 4 recorded is fixed, the hierarchy
+table is built (`internal/hier`, `geohier`), and fixing the first uncovered a
+second and larger defect. Remaining: the Sobol sweep and the report.
+
+#### The hierarchy table
+
+On `soft_over_stiff`, 5–120 Hz, receivers at 2–20 m:
+
+| level | median error | trace rms | per response | where |
+|---|---|---|---|---|
+| L0 analytic | 42–52% | 74–124% | 658 ns | runtime, any range |
+| L1 wavenumber | 0.001–0.005% | 0.03–0.05% | 4.32 ms | offline |
+| L1b bank | 0.02–0.57% | 0.04–0.20% | **46 ns** | runtime, precomputed |
+| L2 grid | 0.1–0.4% (V5) | — | ~30 s a shot | offline only |
+
+**The result that decides something: a bank is fourteen times *faster* than the
+closed form and five hundred times more accurate.** It is also ninety-four
+thousand times faster than the integration it is built from, for two tenths of a
+percent of trace error and eight seconds of build. The cheap model is not cheap;
+its only remaining advantage is needing no build step and working at any range,
+and on a layered site it is wrong by half. WP2 should not use L0 at runtime.
+
+L2 is cited rather than scored, because it cannot run in the production
+attenuation model at all — a difference scheme has no fractional power of
+frequency — so a row would be comparing two media rather than two methods.
+
+Three things the table's construction forced, each a wrong first attempt:
+
+- **Batched over ranges.** The expensive part of the wavenumber solve does not
+  depend on range, so scoring per receiver repeats every solve once per
+  receiver. The first version did not finish.
+- **The bank is scored between its nodes.** A bank is exact at its nodes, and
+  interpolation error is the whole of what that level costs, so the first
+  version reported a bank as free of its only expense.
+- **The band has a floor as well as a ceiling.** The far-field model is
+  asymptotic in kr, so at any fixed range the bottom of a wide band is deep in
+  the near field. A median taken from zero measures the band, not the model.
+
+#### The Hankel phase, found by building the table
+
+**`internal/green`'s far-field model carried `exp(+i pi/4)` where the outgoing
+cylindrical Green's function carries `exp(-i pi/4)`.** Every trace it produced
+from slice 0 onward was ninety degrees out: right magnitude, right spectrum,
+right moveout, **wrong shape** — a symmetric arrival rendered antisymmetric.
+
+It survived three slices because **every comparison between this model and the
+wavenumber integration compared magnitudes**, which agreed, and the code comment
+asserted that the pi/4 "is not a free parameter" without anything testing its
+sign. The complex ratio was never looked at.
+
+The arbiter was `internal/fk`, whose phase V5 pins against a time-domain solver
+to seventeen microseconds. Against it the corrected model **converges with
+range** — 38.8%, 23.4%, 13.8% rms at 10, 20 and 30 m — while the original sits
+near 143% at every range. A residual that does not shrink with distance is not
+an approximation error, because a far-field model improves with distance by
+construction; it is the signature of a constant phase offset. That test now
+exists.
+
+**Two tests were encoding the bug rather than catching it**, and both are worth
+recording because the failure mode is general.
+
+`TestArrivalTimeMatchesRayleighVelocity` asserted that the largest peak of a
+footfall response arrives at r/c_R, and the phase error moved the peak onto that
+time. **Peak picking does not measure the Rayleigh velocity.** The true response
+is a sharp onset with a long tail, so the peak lags the travel time by an offset
+set by the source and the tail rather than by range — 46–49 ms in loam, which at
+5 m is nearly twice the travel time itself and gives an apparent velocity of
+66 m/s against 189. It is replaced by a **moveout** test between ranges, which
+cancels the source and the tail and agrees with c_R to under a percent. **WP3
+needs this fact in that direction**: an array measures moveout; a single sensor
+picking a peak measures something that is not a velocity.
+
+`TestGreensFunctionIsCausal` bounded the acausal precursor at 1e-5 and the bug
+made the model look *more* causal than the physics is — rotating the phase
+smooths the onset, and a smooth onset band-limits cleanly. **A tighter causality
+bound was evidence of a defect, not of quality.** The bound is now 2e-4 against
+a measured 6e-5, which is the price of an asymptotic approximation not being
+exactly causal.
+
+#### What is not yet done
+
+The Sobol sweep over soil, subject and coupling, and the validation report
+regenerable from one command. Both now sit on a corrected forward model, which
+is the right order: a sensitivity analysis of a model with a ninety-degree phase
+error would have produced defensible-looking priors for O4 built on a waveform
+shape that does not occur.
+
 ### What each slice buys
 
 Ordering is not arbitrary. Slices 0–2 are cheap and de-risk integration;
@@ -775,6 +862,7 @@ cmd/                     Go CLIs
   geodisp/               dispersion curves + eigenfunctions
   geobank/               build / inspect / validate GF banks
   geofdtd/               run the grid, and V5 against the f–k path
+  geohier/               the modelling hierarchy: error against cost
   geonode/               the Conductor node (slice 1 onward)
 
 internal/                Go, runtime path
@@ -789,6 +877,7 @@ internal/                Go, runtime path
   dsp/                   FFT wrapper, streaming convolution, filters
   fdtd/                  2D axisymmetric viscoelastic solver, C-PML (L2)
   visco/                 the one relaxation model both paths implement exactly
+  hier/                  scoring the levels against one reference
   trace/                 waveform type + metadata, SAC/miniSEED export
   config/                schema, hashing, provenance
 
