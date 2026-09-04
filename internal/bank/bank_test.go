@@ -402,24 +402,23 @@ func BenchmarkResponse(b *testing.B) {
 	}
 }
 
-// A bank's useful bandwidth is not uniform across its range grid, and a bank
-// built to a single band limit will contain quadrature noise wherever
-// attenuation has already taken the true response below it.
+// The response has to keep falling across the whole band a bank claims, at
+// every range in it.
 //
-// Measured on a 600 Hz bank over loam: at 2 m the response is still rising with
-// frequency at 600 Hz, at 10 m it has fallen by a decade and a half and is
-// still falling, and at 20 m it stops falling around 400 Hz and flattens at
-// about 2e-11 — the floor of the wavenumber integration, not the medium.
+// This test was written for a floor that turned out to be a bug. A 600 Hz bank
+// over loam used to stop falling at 20 m somewhere around 400 Hz and flatten at
+// about 2e-11, which was read as the wavenumber integration running out of
+// precision where the true response had become small — and led to the rule that
+// a bank's band limit must be chosen for its longest range. It was neither
+// precision nor a property of long ranges. The quadrature was leaving its panel
+// at k = 0 open and adding a constant dk*C/2 to every range alike, which floors
+// whichever response is smallest first; at 400 Hz that constant is 2.6e-11.
+// With the panel closed the same response falls to 1.7e-14 by 800 Hz.
 //
-// The consequence is real. A synthesis driven from the flat part of that curve
-// gets noise instead of signal, and because the noise is broadband it inflates
-// the trace's energy rather than obviously corrupting its shape. A bank should
-// therefore be built either with its band limit chosen for the *longest* range
-// it will serve, or with the quadrature refined where the response is small.
-//
-// This test does not assert a floor value — it asserts that the response is
-// still genuinely decaying across the band the bank claims, which is what has
-// to hold for the bank to be usable at that range.
+// What remains true is the physics underneath: at 20 m and 600 Hz there is
+// almost nothing left to sample, so a wide band buys little at long range even
+// though it is now honest. This test guards the honesty — a floor of any origin
+// shows up here as a response that has stopped decaying.
 func TestResponseDecaysAcrossTheClaimedBand(t *testing.T) {
 	const maxFreq = 100.0
 	b, _ := smallBank(t, 2, 12, 41, maxFreq)

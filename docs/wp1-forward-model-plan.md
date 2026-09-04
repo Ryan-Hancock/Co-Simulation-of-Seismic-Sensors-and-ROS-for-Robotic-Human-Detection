@@ -582,18 +582,30 @@ to zero spacing, and extrapolating with the wrong exponent would overshoot by as
 much as it corrects, so `TestConvergenceIsFirstOrder` pins it rather than
 assuming it.
 
-**Finding, and a defect in the production path: `internal/fk`'s default
-wavenumber sampling is about 2% high at the top of the band, and converges only
-linearly.** The integrand has a near-pole at the Rayleigh wavenumber, where a
-trapezoidal rule is first-order accurate at best; halving `dk` halves the
-remaining error rather than quartering it. Measured at 60 Hz and 16 m: the
-default 7 501 samples give a response 1.9% above the Richardson limit, and
-160 000 are needed to reach a tenth of a percent. **This is the sampling the
-slice 5 bank was built with**, so bank amplitudes carry roughly that error at
-the top of their band. The remedy is a quadrature that subtracts the pole's
-analytic contribution rather than more samples, since more samples buy only
-linear improvement — and that is a change to slice 3's solver with its own
-validation burden, so it is recorded here and left for slice 6 to settle.
+**Finding: a defect in the production path, and a wrong diagnosis of it.**
+`internal/fk`'s wavenumber quadrature was leaving its panel at k = 0 open. The
+integrand there is −C, the Boussinesq coefficient, not zero, so every integral
+was short by dk·C/2 — an error linear in the spacing, which dragged a
+second-order rule down to first order and swamped everything else it did. At
+60 Hz and 16 m the default sampling was **1.9% high**; it is now **0.003%**, and
+halving the spacing quarters the error as it should.
+
+Slice 4 first attributed this to the Rayleigh pole and worked around it with
+twenty times the sampling. That was wrong — the pole is adequately resolved by
+the existing spacing rule and the trapezoidal rule is second order through it.
+The diagnosis was reached by reasoning about which part of the integrand looked
+hardest, and the fix by making the symptom smaller, which is exactly the pair of
+moves that hides a one-line bug behind a plausible story. What settled it was
+measuring the convergence *order*: first order pointed at an endpoint, not at a
+pole, because a badly resolved pole degrades the constant and not the exponent.
+
+**`TestQuadratureConverges` asserted 2% agreement and passed for three slices
+while the rule carried a 2% error.** Its replacement asserts the observed order,
+which is what separates a rule that is converging from one that merely happens
+to be close, and would have caught this without needing a second solver to find
+it. That is the same lesson as slice 3's determinants and semigroups, arrived at
+the expensive way: **an identity the thing must satisfy, not a tolerance it
+happens to meet.**
 
 **Isolating the measurement from its reference mattered again**, and in exactly
 the way slice 5 recorded. The first comparison plateaued at 3% rms and *stayed
@@ -697,19 +709,29 @@ layout, swapped real/imaginary parts, byte-order mistake or float32/float64
 confusion each produce a mismatch; against real Green's functions all four would
 produce numbers that still looked like Green's functions.
 
-**Finding: a bank's usable bandwidth is not uniform across its range grid.** At
-2 m the response is still rising with frequency at 600 Hz; at 10 m it has fallen
-a decade and a half and is still falling; at 20 m it stops falling around 400 Hz
-and flattens at ~2e-11 — the *quadrature floor*, not the medium. Synthesising
-from the flat part draws in broadband noise, which inflates a trace's energy
-rather than obviously corrupting its shape. A band limit must be chosen for the
-**longest** range a bank will serve, or the quadrature refined where the
-response is small.
+**Retracted: the "quadrature floor".** This slice recorded that a bank's usable
+bandwidth shrinks with range — that at 20 m over loam the response stopped
+falling around 400 Hz and flattened at about 2e-11, "the quadrature floor, not
+the medium" — and concluded that a band limit must be chosen for the longest
+range a bank will serve. It was neither the quadrature's precision nor a
+property of long ranges. It was the open panel at k = 0 described under slice 4,
+which adds a constant dk·C/2 to every range alike and therefore floors whichever
+response is smallest first. At 400 Hz that constant measures 2.6e-11, which is
+the recorded floor. With the panel closed the same response keeps falling, to
+1.7e-14 by 800 Hz.
 
-The 300 Hz bank had the opposite fault — it truncated the heel-strike transient,
-giving peak ratios of 0.62 at 10 m. The two errors bracket the right answer from
-either side, and neither is visible without comparing against a model that does
-not share them.
+What survives is the physics underneath: at 20 m and 600 Hz there is very little
+left to sample, so a wide band still buys little at long range — it is now
+merely unprofitable rather than actively harmful. **The bank amplitudes measured
+in this slice predate the fix and carry up to about 2% at the top of their band,
+worst where the response is weakest.** Slice 6 regenerates them.
+
+The other half of that comparison stands. A 300 Hz bank truncates the
+heel-strike transient, giving peak ratios of 0.62 at 10 m: a band limit too low
+loses real signal, visibly and in the right direction. Both faults were found
+the same way and it is worth noting which one survived — neither was visible in
+its own output, only against a model that did not share it, and the one that
+turned out to be an artefact was the one whose story was more interesting.
 
 **Cost scaling for bank sizing**: the band limit drives everything
 quadratically, since bins scale with it and the range-spacing limit scales
