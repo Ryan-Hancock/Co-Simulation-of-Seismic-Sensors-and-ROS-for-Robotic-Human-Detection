@@ -6,50 +6,105 @@
       "target": "Rayleigh velocity of a homogeneous Poisson solid",
       "oracle": "c_R/beta = 0.9194 at nu = 0.25, and the rationalised cubic across the whole Poisson range",
       "package": "./internal/soil",
-      "tests": ["TestRayleighVelocityPoissonSolid", "TestRayleighAgainstRationalisedCubic", "TestRayleighRatioIsMonotonicInPoissonRatio"]
+      "tests": [
+        "TestRayleighVelocityPoissonSolid",
+        "TestRayleighAgainstRationalisedCubic",
+        "TestRayleighRatioIsMonotonicInPoissonRatio"
+      ]
     },
     {
       "id": "V2",
       "target": "Absolute amplitude and the near field: vertical surface response to a vertical surface point force",
       "oracle": "Boussinesq's static solution, reached from the wavenumber integration and independently from the time-domain grid",
       "package": "./internal/fk",
-      "tests": ["TestStaticLimitIsBoussinesq", "TestLargeWavenumberLimitIsBoussinesq", "TestFarFieldModelFailsInsideOneWavelength", "TestFarFieldModelAgreesInPhase", "TestQuadratureIsSecondOrder", "TestIntegrandAtZeroWavenumber"],
-      "also": [{"package": "./internal/fdtd", "tests": ["TestBoussinesqStaticLimit"]}]
+      "tests": [
+        "TestStaticLimitIsBoussinesq",
+        "TestLargeWavenumberLimitIsBoussinesq",
+        "TestFarFieldModelFailsInsideOneWavelength",
+        "TestFarFieldModelAgreesInPhase",
+        "TestQuadratureIsSecondOrder",
+        "TestIntegrandAtZeroWavenumber"
+      ],
+      "also": [
+        {
+          "package": "./internal/fdtd",
+          "tests": [
+            "TestBoussinesqStaticLimit"
+          ]
+        }
+      ]
     },
     {
       "id": "V2a",
       "target": "Rayleigh eigenfunctions and the excitation, from first principles",
       "oracle": "free-surface tractions vanish; ellipticity 0.68127 for a Poisson solid",
       "package": "./internal/green",
-      "tests": ["TestFreeSurfaceTractionsVanish", "TestEllipticityOfPoissonSolid", "TestEigenfunctionsDecayWithDepth", "TestRadialForceResponseIsEllipticityTimesQuarterCycle"]
+      "tests": [
+        "TestFreeSurfaceTractionsVanish",
+        "TestEllipticityOfPoissonSolid",
+        "TestEigenfunctionsDecayWithDepth",
+        "TestRadialForceResponseIsEllipticityTimesQuarterCycle"
+      ]
     },
     {
       "id": "V3",
       "target": "Layered dispersion curves, fundamental and higher modes",
       "oracle": "disba 0.7.0, committed as golden files",
       "package": "./internal/disp",
-      "tests": ["TestDispersionMatchesDisba", "TestModesAreOrderedAndDistinct", "TestHigherModesHaveCutoffs", "TestLayeringCausesDispersion"]
+      "tests": [
+        "TestDispersionMatchesDisba",
+        "TestModesAreOrderedAndDistinct",
+        "TestHigherModesHaveCutoffs",
+        "TestLayeringCausesDispersion"
+      ]
     },
     {
       "id": "V4",
-      "target": "High frequency-thickness stability of the propagator formulation",
-      "oracle": "Thomson-Haskell diverges where the Dunkin minors do not; determinant, semigroup and homomorphism identities",
+      "target": "High frequency-thickness stability of the propagator formulations, both of them",
+      "oracle": "Thomson-Haskell diverges where the Dunkin minors do not; determinant, semigroup and homomorphism identities; and, for internal/fk's direct propagator, a half-space split into identical layers",
       "package": "./internal/propmat",
-      "tests": ["TestMinorFormulationSurvivesHighFrequencyThickness", "TestPropagatorIdentities", "TestCompoundIsHomomorphic", "TestHomogeneousReducesToTheRayleighRoot"]
+      "tests": [
+        "TestMinorFormulationSurvivesHighFrequencyThickness",
+        "TestPropagatorIdentities",
+        "TestCompoundIsHomomorphic",
+        "TestHomogeneousReducesToTheRayleighRoot"
+      ],
+      "also": [
+        {
+          "package": "./internal/fk",
+          "tests": [
+            "TestLayeredSolveAgreesWithTheHalfSpaceItIsMadeOf",
+            "TestLayerPhaseLimitScalesWithThickness"
+          ]
+        }
+      ]
     },
     {
       "id": "V5",
       "target": "L1 against L2: the layered wavenumber solve against a time-domain grid sharing none of its code",
       "oracle": "each other, in a medium both represent exactly",
       "package": "./internal/fdtd",
-      "tests": ["TestV5Homogeneous", "TestV5Layered", "TestConvergenceIsFirstOrder", "TestRayleighVelocity", "TestPMLReflection", "TestAttenuationMatchesTheMaterialModel"]
+      "tests": [
+        "TestV5Homogeneous",
+        "TestV5Layered",
+        "TestConvergenceIsFirstOrder",
+        "TestRayleighVelocity",
+        "TestPMLReflection",
+        "TestAttenuationMatchesTheMaterialModel"
+      ]
     },
     {
       "id": "V6",
       "target": "The bank format and its cross-language conformance",
       "oracle": "fixtures written by each language and read by the other",
       "package": "./internal/bank",
-      "tests": ["TestReadsBankWrittenByPython", "TestGoWrittenFixtureMatchesThePattern", "TestInterpolationErrorAgainstStoredValues", "TestExceedingTheSamplingLimitFailsCatastrophically", "TestResponseDecaysAcrossTheClaimedBand"],
+      "tests": [
+        "TestReadsBankWrittenByPython",
+        "TestGoWrittenFixtureMatchesThePattern",
+        "TestInterpolationErrorAgainstStoredValues",
+        "TestExceedingTheSamplingLimitFailsCatastrophically",
+        "TestResponseDecaysAcrossTheClaimedBand"
+      ],
       "outstanding": "The plan's V6 is L1/L2 against an external 3D solver over a flat layered domain. The format and the conformance are done and py/bankfmt can write it; the Devito/SPECFEM3D driver is not written, so no external solver has been compared. This is a partial pass and the report says so."
     },
     {
@@ -57,44 +112,91 @@
       "target": "Geophone amplitude and phase response, and the coupling",
       "oracle": "SM-24 datasheet figures; the analytic limits of a damped second-order transducer",
       "package": "./internal/geophone",
-      "tests": ["TestTransducerAnalyticLimits", "TestShuntDampingRoundTrip", "TestShuntForSeventyPercentIsPlausible", "TestCouplingTransparentInBand", "TestPoorCouplingDistortsInBand", "TestApplyMatchesResponse"]
+      "tests": [
+        "TestTransducerAnalyticLimits",
+        "TestShuntDampingRoundTrip",
+        "TestShuntForSeventyPercentIsPlausible",
+        "TestCouplingTransparentInBand",
+        "TestPoorCouplingDistortsInBand",
+        "TestApplyMatchesResponse"
+      ]
     },
     {
       "id": "V8",
       "target": "Johnson noise power spectral density",
       "oracle": "sqrt(4 k_B T R)",
       "package": "./internal/geophone",
-      "tests": ["TestNoiseDensityJohnson", "TestNoiseSeriesHasStatedDensity", "TestNoiseFloorInVelocityIsWellBelowAmbient"]
+      "tests": [
+        "TestNoiseDensityJohnson",
+        "TestNoiseSeriesHasStatedDensity",
+        "TestNoiseFloorInVelocityIsWellBelowAmbient"
+      ]
     },
     {
       "id": "V9",
       "target": "Causality: no energy before the first arrival",
-      "oracle": "the impulse response itself, not a convolved trace",
+      "oracle": "the impulse response itself for the homogeneous model; for the layered one a band-limited source, because a layered medium does not roll its own impulse response off inside any sample rate",
       "package": "./internal/green",
-      "tests": ["TestGreensFunctionIsCausal", "TestAttenuationFollowsQ", "TestPhaseVelocityDispersesWithFrequency"],
-      "outstanding": "Only the homogeneous model. Causality of the layered impulse response is untested; V5's waveform agreement bears on it indirectly but does not establish it."
+      "tests": [
+        "TestGreensFunctionIsCausal",
+        "TestAttenuationFollowsQ",
+        "TestPhaseVelocityDispersesWithFrequency"
+      ],
+      "also": [
+        {
+          "package": "./internal/fk",
+          "tests": [
+            "TestLayeredResponseHasNoPrecursor"
+          ]
+        }
+      ]
     },
     {
       "id": "V10",
       "target": "Transform and convolution correctness",
       "oracle": "Parseval; convolution against a direct sum",
       "package": "./internal/dsp",
-      "tests": ["TestParseval", "TestRFFTRoundTrip", "TestConvolveMatchesDirect", "TestConvolveDelta"]
+      "tests": [
+        "TestParseval",
+        "TestRFFTRoundTrip",
+        "TestConvolveMatchesDirect",
+        "TestConvolveDelta"
+      ]
     },
     {
       "id": "V11",
       "target": "Ground reaction force profile",
       "oracle": "force-plate literature: peak body weights, hump timing, transient rise; and the momentum balance over a gait cycle",
       "package": "./internal/grf",
-      "tests": ["TestImpulseBalancesBodyWeightOverGaitCycle", "TestProfileShapeMatchesForcePlateLiterature", "TestHeelStrikeTransient", "TestAnteriorPosteriorShear", "TestForceIsContinuousAtContactBoundaries"]
+      "tests": [
+        "TestImpulseBalancesBodyWeightOverGaitCycle",
+        "TestProfileShapeMatchesForcePlateLiterature",
+        "TestHeelStrikeTransient",
+        "TestAnteriorPosteriorShear",
+        "TestForceIsContinuousAtContactBoundaries"
+      ]
     },
     {
       "id": "V12",
       "target": "Chunk-boundary continuity: chunked output identical to one long trace",
       "oracle": "the monolithic convolution, to machine precision",
       "package": "./internal/stream",
-      "tests": ["TestChunkedEqualsMonolithic", "TestOutputIsIndependentOfChunkSize", "TestNoDiscontinuityAtChunkBoundaries", "TestOfflineAndStreamingPathsAgree", "TestProcessDoesNotAllocate"],
-      "also": [{"package": "./cmd/geonode", "tests": ["TestPublishedStreamReassemblesToTheOfflineTrace", "TestNoChunkRateArtefactInThePublishedStream"]}]
+      "tests": [
+        "TestChunkedEqualsMonolithic",
+        "TestOutputIsIndependentOfChunkSize",
+        "TestNoDiscontinuityAtChunkBoundaries",
+        "TestOfflineAndStreamingPathsAgree",
+        "TestProcessDoesNotAllocate"
+      ],
+      "also": [
+        {
+          "package": "./cmd/geonode",
+          "tests": [
+            "TestPublishedStreamReassemblesToTheOfflineTrace",
+            "TestNoChunkRateArtefactInThePublishedStream"
+          ]
+        }
+      ]
     }
   ]
 }

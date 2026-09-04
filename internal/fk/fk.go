@@ -221,6 +221,50 @@ func (m Medium) referenceModulus() float64 {
 	return r
 }
 
+// MaxLayerPhase is the largest k*thickness the direct propagator can carry
+// before it loses the decaying solution to rounding.
+//
+// This package propagates the four-component motion-stress vector directly,
+// which is the formulation Dunkin's compound matrices exist to replace.
+// internal/propmat does use them, and V4 tests that it survives high
+// frequency-thickness; that says nothing about this package, because the two
+// are separate code paths and only one of them is protected.
+//
+// Measured, not assumed, by TestLayeredSolveAgreesWithTheHalfSpaceItIsMadeOf:
+// splitting a half-space into identical layers must change nothing, so any
+// difference is arithmetic. The error is 5e-6 at k*h = 16, 1e-3 at 20, and of
+// order one by 24 — and at 1 m, 2 m and 4 m thickness it is the same curve
+// against k*h, so it is the product that governs and not either factor.
+//
+// The failure above this is not gradual, and until this check existed it was
+// silent: at 400 Hz over a 2 m layer the solve returned a number 132% wrong
+// with no indication. geobank's default band limit is 300 Hz.
+const MaxLayerPhase = 16.0
+
+// checkLayerPhase reports whether every layer is thin enough, at this
+// frequency, for the propagator to stay accurate.
+//
+// The wavenumber that matters is the Rayleigh pole's, not the largest the
+// quadrature visits. Far past the body-wave branch the response is the surface
+// layer's static asymptote alone, the deeper layers contribute nothing, and the
+// precision lost there is lost from quantities that are already zero.
+func (m Medium) checkLayerPhase(freq float64) error {
+	slowest, _ := m.Stack.VelocityBounds()
+	// The pole sits a little below the slowest shear velocity.
+	k := 2 * math.Pi * freq / (0.87 * float64(slowest))
+	for i, l := range m.Stack[:len(m.Stack)-1] {
+		if kh := k * float64(l.Thickness); kh > MaxLayerPhase {
+			return fmt.Errorf("fk: layer %d is %g m thick, which is k*h = %.1f at %g Hz and past "+
+				"the %.0f this propagator stays accurate to; it would return a plausible wrong "+
+				"number rather than fail. Band-limit to %.0f Hz for this stack, or reformulate "+
+				"the solve with compound matrices as internal/propmat does",
+				i, l.Thickness, kh, freq, MaxLayerPhase,
+				MaxLayerPhase*0.87*float64(slowest)/(2*math.Pi*float64(l.Thickness)))
+		}
+	}
+	return nil
+}
+
 // SurfaceResponse is the wavenumber-domain vertical displacement at the free
 // surface, per newton of vertical point force there, at wavenumber k and
 // frequency f. Units are metres per newton per unit of the Hankel measure.
@@ -356,6 +400,9 @@ func (m Medium) VerticalDisplacement(r units.Metres, freq float64, opt Integrati
 	if freq <= 0 {
 		return 0, fmt.Errorf("fk: frequency must be positive, got %g Hz", freq)
 	}
+	if err := m.checkLayerPhase(freq); err != nil {
+		return 0, err
+	}
 	slowest, _ := m.Stack.VelocityBounds()
 	kBody := 2 * math.Pi * freq / float64(slowest)
 	kMax := opt.kMaxFactor() * kBody
@@ -457,6 +504,9 @@ func (m Medium) GridFor(ranges []units.Metres, freq float64, opt Integration) (G
 // range, which for a few hundred ranges is a few hundred times the work for no
 // additional information.
 func (m Medium) VerticalDisplacementMulti(ranges []units.Metres, freq float64, opt Integration) ([]complex128, error) {
+	if err := m.checkLayerPhase(freq); err != nil {
+		return nil, err
+	}
 	g, err := m.GridFor(ranges, freq, opt)
 	if err != nil {
 		return nil, err
