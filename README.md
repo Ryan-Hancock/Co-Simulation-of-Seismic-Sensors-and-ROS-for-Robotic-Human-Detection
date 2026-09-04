@@ -32,3 +32,26 @@ SM-24 or similar vertical geophones, a small array, a UGV. Collect walk-past dat
 
 **WP5 — Energy and integration.**  
 Instrument the power draw of both sensing modes on real hardware, implement the trigger policy, and evaluate on a realistic scenario — a wind farm or solar site inspection route where the robot must detect an unexpected person.
+
+---
+
+### Running it
+
+WP1 is under way. `docs/wp1-forward-model-plan.md` is the plan and the record of
+what each slice found; `docs/validation-report.md` is generated from the test
+suite, so its numbers are the ones the tests measured rather than numbers typed
+in beside them.
+
+```
+make venv          # the pinned Python side: oracles, analysis, figures
+make vet test      # the Go suite; test-short skips the minutes-long grid runs
+make report        # regenerate docs/validation-report.md from the tests
+make hierarchy     # what each modelling level costs, and what it costs you
+make v5            # the wavenumber solve against an independent time-domain grid
+make sobol         # the variance decomposition, estimator self-checked first
+make sweep         # one parameter at a time
+make dispersion    # layered dispersion against the disba golden curves
+```
+
+Go is the runtime path and Python is offline only. The seam between them is
+always a file: Python writes, Go reads, and neither calls the other per sample.
