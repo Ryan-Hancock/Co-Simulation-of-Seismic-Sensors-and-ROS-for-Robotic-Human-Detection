@@ -918,14 +918,64 @@ compared, and V9 covers only the homogeneous model. A renamed test is reported
 as MISSING rather than skipped, because a validation that has quietly stopped
 running is worse than one that fails.
 
+#### The gait, coupled — an axis the analysis said to drop
+
+The decomposition's clearest instruction was wrong, and following it would have
+been worse than having no analysis. Walking speed scored ~0 on every statistic,
+so O4 would have been told not to randomise it. **That was a fact about the
+model, not about walking**: speed moved the stride geometry and nothing else, so
+a walker at 1.8 m/s applied the same force for the same time as one at 0.8 m/s
+and simply covered more ground between steps.
+
+`internal/gait` supplies the missing relations. Cadence and step length come
+from the **walk ratio** — step length over cadence is near-constant across
+walking speeds, which makes both scale as √v. Duty factor, and so stance
+duration and double support, fall with speed; the peak forces rise. At 1.3 m/s
+that gives **109.5 steps/min, a 1.42 m stride and a 0.68 s stance**, which is
+where a gait lab puts it.
+
+**The midstance valley is solved, not fitted.** The momentum balance is the one
+hard constraint on a profile otherwise read off published figures, and the
+valley is what those figures pin down least — the two peaks are what a force
+plate reports most reliably. Spending the constraint on the least certain
+parameter is the right way round. It also makes the balance hold across the
+whole range rather than at one gait: **the demanded impulse goes as 1/duty,
+which falls by a tenth from a slow walk to a brisk one, so a profile tuned at a
+single speed is 8% out at the other end** — an error entirely in the
+low-frequency content of the radiated field. The solved valley falls from 0.74
+to 0.67 BW, inside the band force plates report, so it is a **prediction WP4 can
+check** rather than a parameter fitted to agree.
+
+**The heel-strike transient had to be coupled too, and that is the weakest
+assumption in the model.** The radiated signal at geophone frequencies is mostly
+the transient, so leaving it speed-independent left speed with a 2% effect on
+peak amplitude — the same wrong conclusion by another route. The impact peak
+does rise with heel contact velocity, but the slope used is a plausible linear
+fit rather than a published relation. WP4's force plates should replace it, and
+the sensitivity analysis now says how much that would matter.
+
+**Footwear became a multiplier rather than a competing absolute**, and
+`stance_duration` and `ap_peak` stopped being axes. **Two parameters that set
+the same quantity cancel each other in a variance decomposition** — which is
+how walking speed came to look irrelevant in the first place, and is a trap for
+any sensitivity analysis over a parameterisation nobody checked for redundancy.
+
+Across 0.8–1.8 m/s the one-at-a-time sweep now moves rms by **×1.75**, where it
+moved it by ×1.001 before.
+
+`TestSpeedChangesStrideNotCadenceOrForce` asserted the old behaviour and named
+it honestly. Its replacement goes through the resolver rather than building a
+`source.Walk` by hand — the old test kept passing after the model changed
+because it went round the resolver and exercised a fallback path the model no
+longer takes.
+
 #### What is not yet done
 
 - **V6 proper** — the L3 import path from Devito or SPECFEM3D. `py/bankfmt` can
   already write the format, so this is a driver, not a format question.
-- **V9 for layered media** — causality of the layered impulse response. V5's
-  waveform agreement bears on it but does not establish it.
-- **The source model's speed coupling**, which the Sobol result now makes
-  concrete: an axis O4 would otherwise be told to ignore.
+- **Inter-subject gait variation at a fixed speed** — two people walking at
+  1.3 m/s here have identical gaits, which they do not in life. A WP4 item, when
+  there is force-plate data to characterise the spread with.
 
 ### What each slice buys
 
