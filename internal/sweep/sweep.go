@@ -61,20 +61,21 @@ func Axes() []Axis {
 			Why:   "adult range; the GRF scales with it directly",
 			Apply: func(c *config.Config, v float64) { c.Walker.Mass = v }},
 		{Name: "walk_speed", Unit: "m/s", Lo: 0.8, Hi: 1.8, Steps: 9,
-			Why:   "slow amble to brisk walk, short of running",
+			Why:   "slow amble to brisk walk; drives cadence, stride, stance and the peak forces together",
 			Apply: func(c *config.Config, v float64) { c.Walk.Speed = v }},
+		// stance_duration and ap_peak were axes here until internal/gait
+		// arrived. They are functions of walking speed now, and setting them
+		// independently overrides what the speed implies — which would put
+		// walk_speed back in the position of moving less than it should, which
+		// is the defect the coupling exists to fix. Inter-subject variation in
+		// gait at a fixed speed is genuinely not represented; it is a WP4 item,
+		// when there is force-plate data to characterise the spread with.
 		{Name: "transient_rise", Unit: "s", Lo: 0.006, Hi: 0.030, Steps: 9,
 			Why:   "heel-strike rise times from force-plate literature",
 			Apply: func(c *config.Config, v float64) { c.Walker.TransientRise = v }},
-		{Name: "transient_peak", Unit: "BW", Lo: 0.05, Hi: 0.70, Steps: 9,
-			Why:   "heel-strike spike amplitude, which varies hugely with footwear and surface",
-			Apply: func(c *config.Config, v float64) { c.Walker.TransientPeak = v }},
-		{Name: "stance_duration", Unit: "s", Lo: 0.45, Hi: 0.80, Steps: 9,
-			Why:   "stance phase at walking cadences",
-			Apply: func(c *config.Config, v float64) { c.Walker.StanceDuration = v }},
-		{Name: "ap_peak", Unit: "BW", Lo: 0.02, Hi: 0.40, Steps: 9,
-			Why:   "fore-aft shear as a fraction of body weight",
-			Apply: func(c *config.Config, v float64) { c.Walker.APPeak = v }},
+		{Name: "transient_scale", Unit: "x", Lo: 0.3, Hi: 2.0, Steps: 9,
+			Why:   "footwear and ground surface, as a multiplier on the transient the walking speed implies",
+			Apply: func(c *config.Config, v float64) { c.Walker.TransientScale = v }},
 		{Name: "shear_velocity", Unit: "m/s", Lo: 120, Hi: 400, Steps: 9,
 			Why: "dry sand through firm soil; the dominant medium parameter",
 			Apply: func(c *config.Config, v float64) {

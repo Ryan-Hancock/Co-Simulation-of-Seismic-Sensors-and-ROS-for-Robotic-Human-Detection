@@ -44,7 +44,20 @@ type Stance struct {
 	// MidstanceValley is the trough between them, again in body weights.
 	// Typically 0.7 to 0.8; it deepens as walking speed rises because the
 	// body's centre of mass is accelerating upward over the stance foot.
+	//
+	// internal/gait does not fit this one. It solves for it, from the
+	// momentum balance below.
 	MidstanceValley float64
+	// DutyFactor is the share of the gait cycle this foot spends on the
+	// ground. Zero uses StanceFraction.
+	//
+	// It is here because the momentum balance depends on it and on nothing
+	// else about the timing: the demanded impulse is body weight times the
+	// cycle, and the cycle is the stance divided by this. Holding it at a
+	// constant while stance duration varies with speed would put an eight
+	// percent error into the balance across the walking range, which is the
+	// low-frequency content of the radiated field.
+	DutyFactor float64
 	// HumpWidth is the Gaussian half-width of each peak, as a fraction of
 	// stance. Zero uses the default.
 	HumpWidth float64
@@ -160,6 +173,14 @@ func (s Stance) humpWidth() float64 {
 		return s.HumpWidth
 	}
 	return defaultHumpWidth
+}
+
+// dutyFactor is the stance share of the gait cycle.
+func (s Stance) dutyFactor() float64 {
+	if s.DutyFactor > 0 {
+		return s.DutyFactor
+	}
+	return StanceFraction
 }
 
 func (s Stance) taperFraction() float64 {
@@ -346,9 +367,52 @@ func (s Stance) Impulse() float64 {
 // to the ground, and will get the low-frequency content of the radiated field
 // wrong in a way no amount of correct propagation modelling can recover.
 func (s Stance) ImpulseRatio() float64 {
-	cycle := float64(s.Duration) / StanceFraction
+	cycle := float64(s.Duration) / s.dutyFactor()
 	demanded := float64(s.BodyWeight()) * cycle
 	return 2 * s.Impulse() / demanded
+}
+
+// BalancedValley is the midstance valley at which the profile delivers exactly
+// the momentum gravity demands, given everything else about the stance.
+//
+// The valley is solved for rather than fitted because the momentum balance is
+// the one hard constraint on a profile whose shape is otherwise read off
+// published figures, and because the valley is the part of the M those figures
+// pin down least — the two peaks are what a force plate reports most reliably
+// and what the literature tabulates against speed. Spending the constraint on
+// the least certain parameter is the right way round.
+//
+// It also makes the balance hold across the whole walking range instead of at
+// one gait. The demanded impulse scales as one over the duty factor, which
+// falls from about 0.65 at a slow walk to 0.59 at a brisk one, so a profile
+// tuned at a single speed is eight percent out at the other end. That error is
+// entirely in the low-frequency content of the radiated field, where no amount
+// of correct propagation modelling can recover it.
+//
+// The impulse rises monotonically with the valley, so a bisection cannot land
+// on the wrong root; there is only one.
+func (s Stance) BalancedValley() (float64, error) {
+	f := func(v float64) float64 {
+		t := s
+		t.MidstanceValley = v
+		return t.ImpulseRatio() - 1
+	}
+	lo, hi := 0.05, 1.5
+	flo, fhi := f(lo), f(hi)
+	if flo > 0 || fhi < 0 {
+		return 0, fmt.Errorf("grf: no valley between %g and %g body weights balances the momentum "+
+			"of a %g s stance at duty %g with peaks %g and %g",
+			lo, hi, float64(s.Duration), s.dutyFactor(), s.FirstPeak, s.SecondPeak)
+	}
+	for range 60 {
+		mid := 0.5 * (lo + hi)
+		if f(mid) < 0 {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return 0.5 * (lo + hi), nil
 }
 
 // PeakForce is the largest vertical force during the stance.

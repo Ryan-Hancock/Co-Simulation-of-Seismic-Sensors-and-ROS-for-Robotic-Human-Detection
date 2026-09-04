@@ -466,37 +466,64 @@ func TestShearNullsAbeamAndContributesInLine(t *testing.T) {
 	}
 }
 
-// Two stated limitations of the gait model, recorded as a test so that fixing
-// either shows up here as a deliberate change rather than passing unnoticed.
+// Walking faster changes the whole gait, not just the geometry.
 //
-// Walking speed lengthens the stride but does not change the cadence, because
-// the gait cycle is derived from stance duration and stance duration is an
-// independent input. And the per-step force is the same at any speed. Real
-// walkers do neither: cadence rises with speed, stance shortens, and peak
-// ground reaction force climbs from about 1.1 body weights at a stroll to over
-// 1.3 at a brisk pace.
+// This test used to assert the opposite, and said so plainly: speed moved the
+// stride and left cadence and force alone, because coupling them needed
+// force-plate relations the model did not have. Slice 6's Sobol decomposition
+// then gave walking speed a total-effect index of essentially zero on every
+// statistic — a true fact about the model and a false one about walking, and
+// one that would have told O4 not to randomise the axis at all.
 //
-// This is why the sensitivity sweep finds walking speed almost irrelevant —
-// a result about the model, not about walking. Sweeping speed meaningfully
-// means co-varying stance duration and the peaks with it, and doing that
-// properly needs the force-plate relations WP4 can supply.
-func TestSpeedChangesStrideNotCadenceOrForce(t *testing.T) {
-	res := base(t)
-	a := source.Walk{Stance: res.Walker, Speed: 0.9, StartX: -6, StartY: 8, Until: 8}
-	b := source.Walk{Stance: res.Walker, Speed: 1.7, StartX: -6, StartY: 8, Until: 8}
+// internal/gait supplies the relations now, so the assertions invert. It is
+// exercised through WalkPast rather than by building a source.Walk directly,
+// because the fallback stride is still there for callers who state their own
+// stance and it still holds cadence fixed; going round the resolver would test
+// the path the model no longer takes.
+func TestSpeedMovesCadenceStanceAndForce(t *testing.T) {
+	at := func(speed float64) (source.Walk, grf.Stance) {
+		c := config.Default()
+		c.Walk.Speed = speed
+		res, err := c.Resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.WalkPast(), res.Walker
+	}
+	slow, slowStance := at(0.9)
+	fast, fastStance := at(1.7)
 
-	if b.StrideOrDefault() <= a.StrideOrDefault() {
-		t.Errorf("faster walking did not lengthen the stride: %g then %g m",
-			a.StrideOrDefault(), b.StrideOrDefault())
+	if fast.StrideOrDefault() <= slow.StrideOrDefault() {
+		t.Errorf("faster walking did not lengthen the stride: %.3f then %.3f m",
+			slow.StrideOrDefault(), fast.StrideOrDefault())
 	}
-	if math.Abs(float64(a.StepPeriod()-b.StepPeriod())) > 1e-12 {
-		t.Errorf("cadence moved with speed: %g then %g s. If stance duration is now "+
-			"coupled to speed, that is an improvement — update this test to say so",
-			a.StepPeriod(), b.StepPeriod())
+	if fast.StepPeriod() >= slow.StepPeriod() {
+		t.Errorf("faster walking did not quicken the cadence: %.3f then %.3f s a step",
+			slow.StepPeriod(), fast.StepPeriod())
 	}
-	if a.Stance.PeakForce() != b.Stance.PeakForce() {
-		t.Errorf("per-step peak force differs with speed: %g vs %g. If the peaks are now "+
-			"coupled to speed, update this test", a.Stance.PeakForce(), b.Stance.PeakForce())
+	if fastStance.Duration >= slowStance.Duration {
+		t.Errorf("faster walking did not shorten the stance: %.3f then %.3f s",
+			slowStance.Duration, fastStance.Duration)
+	}
+	if fastStance.PeakForce() <= slowStance.PeakForce() {
+		t.Errorf("faster walking did not raise the peak force: %.1f then %.1f N",
+			slowStance.PeakForce(), fastStance.PeakForce())
+	}
+	t.Logf("0.9 m/s: %.1f steps/min, stance %.3f s, peak %.0f N",
+		60/slow.StepPeriod(), slowStance.Duration, slowStance.PeakForce())
+	t.Logf("1.7 m/s: %.1f steps/min, stance %.3f s, peak %.0f N",
+		60/fast.StepPeriod(), fastStance.Duration, fastStance.PeakForce())
+
+	// Speed and stride and cadence are one relation, not three: the product of
+	// the last two has to be the first, or the walker is sliding.
+	for _, c := range []struct {
+		v float64
+		w source.Walk
+	}{{0.9, slow}, {1.7, fast}} {
+		got := c.w.StrideOrDefault() / 2 / float64(c.w.StepPeriod())
+		if math.Abs(got-c.v) > 1e-9 {
+			t.Errorf("at %g m/s the stride and cadence imply %g m/s", c.v, got)
+		}
 	}
 }
 

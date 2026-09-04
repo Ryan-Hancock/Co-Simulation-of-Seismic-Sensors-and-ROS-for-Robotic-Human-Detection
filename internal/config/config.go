@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"geosim.dev/geosim/internal/gait"
 	"geosim.dev/geosim/internal/geophone"
 	"geosim.dev/geosim/internal/grf"
 	"geosim.dev/geosim/internal/soil"
@@ -64,8 +65,17 @@ type WalkerSpec struct {
 	// whole model and the part the radiated signal depends on most, which
 	// makes them the first axes any sensitivity analysis has to sweep.
 	TransientPeak float64 `json:"transient_peak_bw,omitempty"`
-	TransientRise float64 `json:"transient_rise_s,omitempty"`
-	APPeak        float64 `json:"ap_peak_bw,omitempty"`
+	// TransientScale multiplies the heel-strike transient the gait derives
+	// from walking speed. Zero means one.
+	//
+	// A multiplier rather than a second absolute, because footwear and walking
+	// speed both set this quantity and two parameters that set the same
+	// quantity cancel each other in a variance decomposition — which is how
+	// walking speed came to look irrelevant in the first place. Speed sets the
+	// nominal transient; this says what the shoes and the ground do to it.
+	TransientScale float64 `json:"transient_scale,omitempty"`
+	TransientRise  float64 `json:"transient_rise_s,omitempty"`
+	APPeak         float64 `json:"ap_peak_bw,omitempty"`
 }
 
 type SensorSpec struct {
@@ -121,8 +131,9 @@ type NoiseSpec struct {
 // recorded on an SM-24 shunted to 0.7 of critical at 2 kHz.
 func Default() Config {
 	return Config{
-		Soil:     SoilSpec{Preset: "loam"},
-		Walker:   WalkerSpec{Mass: 75, StanceDuration: 0.62, FirstPeak: 1.15, SecondPeak: 1.12, MidstanceValley: 0.75},
+		Soil: SoilSpec{Preset: "loam"},
+		// Only the mass. The gait comes from the speed below.
+		Walker:   WalkerSpec{Mass: 75},
 		Sensor:   SensorSpec{Preset: "sm24", TargetDamping: 0.7},
 		Geometry: Geometry{Range: 10, ApproachLength: 10},
 		Walk:     WalkSpec{Speed: 1.3, Width: 0.12},
@@ -130,6 +141,9 @@ func Default() Config {
 		Noise:    NoiseSpec{Enabled: true, Seed: 1},
 	}
 }
+
+// defaultSpeed is a comfortable walking pace.
+const defaultSpeed = 1.3
 
 // Presets available to SoilSpec.Preset.
 var soilPresets = map[string]func() soil.HalfSpace{
@@ -152,8 +166,13 @@ func SoilPresetNames() []string {
 // explicit. It is what actually gets hashed and what gets written alongside
 // the trace, so that a run is reproducible from its own output.
 type Resolved struct {
-	Soil     soil.HalfSpace    `json:"soil"`
-	Walker   grf.Stance        `json:"walker"`
+	Soil   soil.HalfSpace `json:"soil"`
+	Walker grf.Stance     `json:"walker"`
+	// Gait is the timing and geometry the walking speed implies. It is part of
+	// the resolved physics rather than a derived convenience, so it is inside
+	// the hash: two runs at different speeds are different physics even where
+	// every other field matches.
+	Gait     gait.Gait         `json:"gait"`
 	Sensor   geophone.Geophone `json:"sensor"`
 	Geometry Geometry          `json:"geometry"`
 	Walk     WalkSpec          `json:"walk"`
@@ -198,16 +217,52 @@ func (c Config) Resolve() (Resolved, error) {
 		return r, err
 	}
 
-	// Walker.
-	r.Walker = grf.Stance{
-		Mass:            units.Kilograms(c.Walker.Mass),
-		Duration:        units.Seconds(c.Walker.StanceDuration),
-		FirstPeak:       c.Walker.FirstPeak,
-		SecondPeak:      c.Walker.SecondPeak,
-		MidstanceValley: c.Walker.MidstanceValley,
-		TransientPeak:   c.Walker.TransientPeak,
-		TransientRise:   units.Seconds(c.Walker.TransientRise),
-		APPeak:          c.Walker.APPeak,
+	// Walker. The gait follows from the walking speed — cadence, stride,
+	// stance duration and the peak forces all move together, because in a
+	// walker they do. Explicit fields override what it derives, so a config
+	// can still describe an unusual subject; but the default is a consistent
+	// gait rather than a set of independently chosen numbers that happen to
+	// sit beside a speed.
+	speed := c.Walk.Speed
+	if speed == 0 {
+		speed = defaultSpeed
+	}
+	if speed < 0 {
+		return r, fmt.Errorf("config: walking speed must not be negative, got %g m/s", speed)
+	}
+	g, err := gait.At(units.SpeedMPS(speed))
+	if err != nil {
+		return r, err
+	}
+	r.Gait = g
+	r.Walker, err = g.Stance(grf.Stance{
+		Mass:          units.Kilograms(c.Walker.Mass),
+		TransientPeak: c.Walker.TransientPeak,
+		TransientRise: units.Seconds(c.Walker.TransientRise),
+		APPeak:        c.Walker.APPeak,
+	})
+	if err != nil {
+		return r, err
+	}
+	// Overrides last, and the momentum balance is not re-solved after them: a
+	// config that states its own peaks is asserting a measurement, and quietly
+	// moving the valley to rebalance it would be overruling the person who
+	// wrote it. TestImpulseBalanceAcrossPlausibleGaits bounds how far an
+	// override can push the balance.
+	if c.Walker.StanceDuration > 0 {
+		r.Walker.Duration = units.Seconds(c.Walker.StanceDuration)
+	}
+	if c.Walker.FirstPeak > 0 {
+		r.Walker.FirstPeak = c.Walker.FirstPeak
+	}
+	if c.Walker.SecondPeak > 0 {
+		r.Walker.SecondPeak = c.Walker.SecondPeak
+	}
+	if c.Walker.MidstanceValley > 0 {
+		r.Walker.MidstanceValley = c.Walker.MidstanceValley
+	}
+	if c.Walker.TransientScale > 0 {
+		r.Walker.TransientPeak *= c.Walker.TransientScale
 	}
 	if err := r.Walker.Validate(); err != nil {
 		return r, err
@@ -265,9 +320,6 @@ func (c Config) Resolve() (Resolved, error) {
 	if c.Geometry.ApproachLength < 0 {
 		return r, fmt.Errorf("config: approach length must not be negative, got %g m", c.Geometry.ApproachLength)
 	}
-	if c.Walk.Speed < 0 {
-		return r, fmt.Errorf("config: walking speed must not be negative, got %g m/s", c.Walk.Speed)
-	}
 	if c.Walk.Width < 0 {
 		return r, fmt.Errorf("config: stance width must not be negative, got %g m", c.Walk.Width)
 	}
@@ -276,7 +328,7 @@ func (c Config) Resolve() (Resolved, error) {
 		r.Geometry.ApproachLength = 10
 	}
 	if r.Walk.Speed == 0 {
-		r.Walk.Speed = 1.3
+		r.Walk.Speed = defaultSpeed
 	}
 	if r.Walk.Width == 0 {
 		r.Walk.Width = 0.12
@@ -317,10 +369,14 @@ func (r Resolved) WalkPast() source.Walk {
 	return source.Walk{
 		Stance: r.Walker,
 		Speed:  r.Walk.Speed,
-		StartX: -r.Geometry.ApproachLength,
-		StartY: r.Geometry.Range,
-		Width:  r.Walk.Width,
-		Until:  r.WalkDuration(),
+		// Stated rather than left to the fallback, which infers a stride from
+		// the stance duration alone and so holds cadence fixed as speed
+		// changes — the defect internal/gait exists to fix.
+		StrideLength: float64(r.Gait.StrideLength),
+		StartX:       -r.Geometry.ApproachLength,
+		StartY:       r.Geometry.Range,
+		Width:        r.Walk.Width,
+		Until:        r.WalkDuration(),
 	}
 }
 
